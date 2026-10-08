@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Ctx, Limit, Mood } from '../types'
+import type { Compaction, Ctx, Limit, Mood } from '../types'
 import { DONE_SECONDS, SCENE_HEIGHT, SCENE_WIDTH, sceneSvg } from './scene'
 
 const mood = atom({ plugin: 'pixel-buddy', key: 'mood' } as const, 'idle' as Mood)
@@ -12,6 +12,8 @@ const now = atom({ plugin: 'pixel-buddy', key: 'now' } as const, 0)
 const minute = atom({ plugin: 'pixel-buddy', key: 'minute' } as const, 0)
 const ctx = atom({ plugin: 'pixel-buddy', key: 'ctx' } as const, null as Ctx | null)
 const limits = atom({ plugin: 'pixel-buddy', key: 'limits' } as const, [] as Limit[])
+// monster-compact's value, read only: undefined while that plugin is not installed.
+const compaction = { plugin: 'monster-compact', key: 'compaction' } as const
 
 // The "task complete" party plays once, then Claude relaxes for a while before idling.
 const RELAX_MS = 4 * 60_000
@@ -37,13 +39,15 @@ function clockText(ms: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
-function ringSvg(percent: number, icon: 'clock' | 'cal'): string {
+function ringSvg(percent: number, icon: 'clock' | 'cal' | 'compact'): string {
   const C = 2 * Math.PI * 12
   const p = Math.min(100, Math.max(0, percent)) / 100
   const glyph =
     icon === 'clock'
       ? '<circle cx="15" cy="15" r="5.5" fill="none" stroke="#a0a0a0" stroke-width="1.6"/><path d="M15 12v3.4h2.6" fill="none" stroke="#a0a0a0" stroke-width="1.6" stroke-linecap="round"/>'
-      : '<rect x="10" y="11" width="10" height="9" rx="1.5" fill="none" stroke="#a0a0a0" stroke-width="1.6"/><path d="M10 14h10M12.5 9.5v3M17.5 9.5v3" stroke="#a0a0a0" stroke-width="1.6" stroke-linecap="round"/>'
+      : icon === 'compact'
+        ? '<path d="M10.5 10.2l4.5 3.4 4.5-3.4M10.5 19.8l4.5-3.4 4.5 3.4" fill="none" stroke="#a0a0a0" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>'
+        : '<rect x="10" y="11" width="10" height="9" rx="1.5" fill="none" stroke="#a0a0a0" stroke-width="1.6"/><path d="M10 14h10M12.5 9.5v3M17.5 9.5v3" stroke="#a0a0a0" stroke-width="1.6" stroke-linecap="round"/>'
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 30" width="30" height="30">` +
     `<circle cx="15" cy="15" r="12" fill="none" stroke="#3a3a3a" stroke-width="2.6"/>` +
@@ -104,6 +108,16 @@ function sceneFor(m: Mood, elapsed: number): { mood: Mood; t: number } {
 
 const kTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}k`)
 
+// How far the context is toward its next compaction, 0 to 100; undefined before a reading.
+const towardCompact = (c: Ctx | null, at: number) =>
+  c?.percent === undefined || !(at > 0) ? undefined : Math.min(100, Math.max(0, (c.percent / at) * 100))
+// What the latest compaction saved: a figure the publisher measured stands as it is, its estimate is marked as one.
+const savedText = (k: Compaction) =>
+  k.count ? ` · ${k.lastSavedMeasured === true ? '' : '~'}${kTokens(k.lastSaved)} saved` : ''
+// A published value is drawn only when it holds a threshold: anything else is no publisher at all.
+const published = (k: Compaction | undefined) =>
+  k && typeof k.compactAtPercent === 'number' && Number.isFinite(k.compactAtPercent) ? k : undefined
+
 export const register: Register = (on, options) => {
   const ttlMs = options.cacheTtl === '5m' ? 5 * 60_000 : 60 * 60_000
 
@@ -159,7 +173,8 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // The band above the prompt: two usage rings on the left, the mascot on the right.
+  // The band above the prompt: two usage rings on the left (a third for the next
+  // compaction while monster-compact publishes one), the mascot on the right.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const ui = $.ui.resolve(e)
@@ -179,11 +194,16 @@ export const register: Register = (on, options) => {
     const caption = (lim: Limit | undefined, label: string) =>
       lim?.resetsAt && t ? `${label} · resets in ${span(Date.parse(lim.resetsAt) - t)}` : `${label} · waiting for a reading`
     const pctText = (lim: Limit | undefined) => (lim ? `${Math.round(lim.percentUsed)}%` : '–')
+    const comp = published(await read($, compaction))
+    const toward = comp ? towardCompact(await read($, ctx), comp.compactAtPercent) : undefined
+    const towardText = toward === undefined ? '–' : `${Math.round(toward)}%`
 
     if (e.surface !== 'desktop' && e.surface !== 'vscode') {
       return (
         <Box>
-          <Text dimColor>{shown.map(s => `${s.label} ${pctText(s.lim)}`).join('   ')}</Text>
+          <Text dimColor>
+            {[...shown.map(s => `${s.label} ${pctText(s.lim)}`), ...(comp ? [`compact ${towardText}${savedText(comp)}`] : [])].join('   ')}
+          </Text>
         </Box>
       )
     }
@@ -191,7 +211,7 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="row" alignItems="center" justifyContent="space-between" paddingX={1}>
-        <Box flexDirection="row" alignItems="center" gap={3}>
+        <Box flexDirection="row" alignItems="center" gap={3} {...(comp ? ({ flexWrap: 'wrap', rowGap: 0 } as const) : {})}>
           {shown.map(s => (
             <Box key={s.kind} flexDirection="row" alignItems="center" gap={1}>
               <Svg source={ringSvg(s.lim?.percentUsed ?? 0, s.icon)} alt={`${s.label} usage ring`} width={30} height={30} />
@@ -199,6 +219,13 @@ export const register: Register = (on, options) => {
               <Text dimColor>{caption(s.lim, s.label)}</Text>
             </Box>
           ))}
+          {comp ? (
+            <Box key="compact" flexDirection="row" alignItems="center" gap={1}>
+              <Svg source={ringSvg(toward ?? 0, 'compact')} alt="compaction ring" width={30} height={30} />
+              <Text bold>{towardText}</Text>
+              <Text dimColor>{`compact · at ${comp.compactAtPercent}%${savedText(comp)}${comp.count > 1 ? ` (${comp.count}×)` : ''}`}</Text>
+            </Box>
+          ) : null}
         </Box>
         <Svg
           source={sceneSvg(shownMood, sceneT)}
