@@ -16,8 +16,8 @@ const PROPS = {
 }
 const NONE: Compaction = { compactAtPercent: 60, count: 0, lastSaved: 0, lastSavedMeasured: false, totalSaved: 0, lastAt: null }
 const ONE: Compaction = { ...NONE, count: 1, lastSaved: 172_000, totalSaved: 172_000, lastAt: NOW }
-const C = 2 * Math.PI * 12
-const CHEVRONS = 'd="M10.5 10.2l4.5 3.4 4.5-3.4M10.5 19.8l4.5-3.4 4.5 3.4"'
+// The context bar's tick: 2 px wide, centred on 60% of the 72 px bar.
+const TICK = '<rect x="42.20" y="0" width="2" height="7" fill="#e8e6df"/>'
 
 // A session whose context stands at `percent` (none before a reading), with both usage
 // windows read, and the band mounted on `surface`. `seated` is what monster-compact
@@ -40,66 +40,65 @@ async function band<S extends 'terminal' | 'desktop'>($: Engine, on: On, surface
   return $.ui.mount({ plugin: 'pixel-buddy', surface, component: 'AbovePrompt', props: PROPS })
 }
 
-// The rings of a desktop band (every Svg but the mascot) and the texts beside them.
-async function rings($: Engine, on: On, seated?: Compaction, percent?: number) {
+// A desktop band's stat columns (their keys, in order), its bars (every Svg that says
+// it is one), its mascot, and its texts in reading order.
+async function columns($: Engine, on: On, seated?: Compaction, percent?: number) {
   const ui = await band($, on, 'desktop', seated, percent)
-  const svgs = (await ui.findAll({ type: 'Svg' })).map(s => s.props as { source: string; alt: string })
+  const svgs = (await ui.findAll({ type: 'Svg' })).map(s => s.props as { source: string; alt: string; width: number; height: number })
   const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
-  return { ui, rings: svgs.filter(s => s.alt.endsWith('ring')), mascot: svgs.filter(s => !s.alt.endsWith('ring')), texts }
+  const tree = (await ui.drawn()) as unknown as { children: { children: { props: { key: string } }[] }[] }
+  // The bled mascot and the blank holding its room lead; the stat columns follow.
+  const keys = tree.children[2]?.children.map(c => c.props.key)
+  return { keys, bars: svgs.filter(s => / bar, /.test(s.alt)), mascot: svgs.filter(s => s.alt.startsWith('Claude is')), texts }
 }
 
+const LIMITS = ['41%', '5h', 'resets 3h 12m', '19%', '7d', 'resets 6d 0h']
+const CONTEXT = ['80k', '/ 200k', 'context · 40%']
+
 describe('register', () => {
-  test('desktop: two rings, as before, while nothing is published', { plugins: [publisher] }, async ($, on) => {
-    const { ui, rings: drawn, mascot, texts } = await rings($, on, undefined, 40)
-    expect(drawn.map(r => r.alt)).toEqual(['5h usage ring', '7d usage ring'])
-    expect(mascot).toHaveLength(1)
-    expect(texts).toEqual(['41%', '5h · resets in 3h 12m', '19%', '7d · resets in 6d 0h'])
-    // The left group is the tree the plugin drew before the third ring existed.
-    const tree = (await ui.drawn()) as unknown as { children: { props: unknown; children: { props: { key: string } }[] }[] }
-    expect(tree.children[0]?.props).toEqual({ flexDirection: 'row', alignItems: 'center', gap: 3 })
-    expect(tree.children[0]?.children.map(c => c.props.key)).toEqual(['five_hour', 'seven_day'])
+  test('desktop: the mascot and three columns while nothing is published', { plugins: [publisher] }, async ($, on) => {
+    const { keys, bars, mascot, texts } = await columns($, on, undefined, 40)
+    expect(keys).toEqual(['five_hour', 'seven_day', 'context'])
+    expect(texts).toEqual([...LIMITS, ...CONTEXT])
+    expect(bars.map(b => b.alt)).toEqual(['5h bar, 41%', '7d bar, 19%', 'context bar, 40%'])
+    // No threshold is known, so the context bar carries no tick.
+    expect(bars.some(b => b.source.includes('#e8e6df'))).toBe(false)
+    expect(bars[0]?.source).toContain('<rect x="0" y="2" width="29.52" height="3" rx="1.5" fill="#4cc35a"/>')
+    expect(mascot.map(m => [m.width, m.height])).toEqual([[216, 104]])
   })
 
-  test('desktop: a third ring, after 7d, when the state is present', { plugins: [publisher] }, async ($, on) => {
-    const { ui, rings: drawn, mascot, texts } = await rings($, on, NONE, 40)
-    expect(drawn.map(r => r.alt)).toEqual(['5h usage ring', '7d usage ring', 'compaction ring'])
+  test('desktop: a fourth column and the context tick when the state is present', { plugins: [publisher] }, async ($, on) => {
+    const { keys, bars, mascot, texts } = await columns($, on, { ...ONE, count: 3 }, 40)
+    expect(keys).toEqual(['five_hour', 'seven_day', 'context', 'compact'])
+    // 80k of a 200k window against a 60% threshold: 120k - 80k left.
+    expect(texts).toEqual([...LIMITS, ...CONTEXT, '40k', 'left', 'saved ~172k (3×)'])
+    // The fourth column has no bar; the tick is on the context bar alone.
+    expect(bars.map(b => [b.alt, b.source.includes(TICK)])).toEqual([
+      ['5h bar, 41%', false],
+      ['7d bar, 19%', false],
+      ['context bar, 40%', true],
+    ])
     expect(mascot).toHaveLength(1)
-    // 40% of the window against a 60% threshold: two thirds of the way.
-    expect(texts.slice(4)).toEqual(['67%', 'compact · at 60%'])
-    expect(texts.slice(0, 4)).toEqual(['41%', '5h · resets in 3h 12m', '19%', '7d · resets in 6d 0h'])
-    const ring = drawn[2]?.source ?? ''
-    expect(ring).toContain(CHEVRONS)
-    expect(ring).toContain('stroke="#a0a0a0" stroke-width="1.6" stroke-linecap="round"')
-    expect(ring).toContain(`stroke="#4cc35a" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="${((C * 2) / 3).toFixed(2)} ${C.toFixed(2)}"`)
-    // Same geometry and track as the other two.
-    const track = '<circle cx="15" cy="15" r="12" fill="none" stroke="#3a3a3a" stroke-width="2.6"/>'
-    for (const r of drawn) expect(r.source.startsWith(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 30" width="30" height="30">${track}`)).toBe(true)
-    const tree = (await ui.drawn()) as unknown as { children: { props: unknown; children: { props: { key: string; gap: number } }[] }[] }
-    // The existing gap between items; a band too narrow for three wraps whole items, not their text.
-    expect(tree.children[0]?.props).toEqual({ flexDirection: 'row', alignItems: 'center', gap: 3, flexWrap: 'wrap', rowGap: 0 })
-    expect(tree.children[0]?.children.map(c => c.props.key)).toEqual(['five_hour', 'seven_day', 'compact'])
-    expect(tree.children[0]?.children.map(c => c.props.gap)).toEqual([1, 1, 1])
   })
 
   test('desktop: a measured saving stands without the mark', { plugins: [publisher] }, async ($, on) => {
     const measured = { ...ONE, lastSaved: 85_343, totalSaved: 85_343, lastSavedMeasured: true, lastBefore: 164_377, lastAfter: 79_034 }
-    const { texts } = await rings($, on, measured, 40)
-    expect(texts.slice(4)).toEqual(['67%', 'compact · at 60% · 85k saved'])
+    const { texts } = await columns($, on, measured, 40)
+    expect(texts.slice(-3)).toEqual(['40k', 'left', 'saved 85k'])
   })
 
-  test('desktop: a value without a threshold draws the upstream band, never "at undefined%"', { plugins: [publisher] }, async ($, on) => {
+  test('desktop: a value without a usable threshold draws the three-column band', { plugins: [publisher] }, async ($, on) => {
     const { compactAtPercent: _none, ...partial } = ONE
-    const { ui, rings: drawn, texts } = await rings($, on, partial as Compaction, 40)
-    expect(drawn.map(r => r.alt)).toEqual(['5h usage ring', '7d usage ring'])
-    expect(texts).toEqual(['41%', '5h · resets in 3h 12m', '19%', '7d · resets in 6d 0h'])
-    const tree = (await ui.drawn()) as unknown as { children: { props: unknown }[] }
-    expect(tree.children[0]?.props).toEqual({ flexDirection: 'row', alignItems: 'center', gap: 3 })
+    const { keys, bars, texts } = await columns($, on, partial as Compaction, 40)
+    expect(keys).toEqual(['five_hour', 'seven_day', 'context'])
+    expect(texts).toEqual([...LIMITS, ...CONTEXT])
+    expect(bars.some(b => b.source.includes('#e8e6df'))).toBe(false)
   })
 
-  test('terminal: the compaction joins the line, in its format', { plugins: [publisher] }, async ($, on) => {
+  test('terminal: one line with the same figures', { plugins: [publisher] }, async ($, on) => {
     const ui = await band($, on, 'terminal', ONE, 40)
     expect((await ui.findAll({ type: 'Text' })).map(t => [t.text, t.props])).toEqual([
-      ['5h 41%   7d 19%   compact 67% · ~172k saved', { dimColor: true }],
+      ['5h 41% 3h 12m · 7d 19% 6d 0h · ctx 80k/200k 40% · 40k left · saved ~172k', { dimColor: true }],
     ])
   })
 })

@@ -10,6 +10,31 @@ export const BAND_BG = '#212121'
 
 const W = 100
 const H = 18
+// PORTRAIT: the picture is the left PORTRAIT_COLS columns of the (mirrored) scene at
+// PORTRAIT_SCALE, with PAD_ROWS extra rows above and below and PAD_COLS extra columns
+// on the left for the band to clip: (48+6)*4 = 216 px by (18+8)*4 = 104 px. Off, it is
+// the whole 100x18 scene at STRIP_SCALE: 300x54.
+const PORTRAIT: boolean = true
+const PORTRAIT_COLS = 48
+const PORTRAIT_SCALE = 4
+const PAD_ROWS = 4
+const PAD_COLS = 6
+const STRIP_SCALE = 3
+// GRADIENT_FADE: the picture's right edge fades into the band through a linear
+// gradient; off, through the Bayer dither. Either way over the last FADE_COLUMNS
+// visible grid columns.
+const GRADIENT_FADE: boolean = true
+const FADE_COLUMNS = 16
+
+// CALIBRATE: sceneSvg returns a ruled test card the size of the picture instead of a
+// scene, for reading off a screenshot how much the band hides on each side.
+const CALIBRATE: boolean = false
+
+const SCALE = PORTRAIT ? PORTRAIT_SCALE : STRIP_SCALE
+// The grid columns on show, and the extra ones around them.
+const VIEW_COLS = PORTRAIT ? PORTRAIT_COLS : W
+const PAD_X = PORTRAIT ? PAD_COLS : 0
+const PAD_Y = PORTRAIT ? PAD_ROWS : 0
 
 const PAL: Record<string, string> = {
   o: '#d97757', // claude orange
@@ -201,10 +226,32 @@ function lastValue(track: Track, key: keyof Pose): number {
 
 const n2 = (v: number) => Math.round(v * 100) / 100
 
+// The order a mood's n scenes play in for one entry into it: a Fisher-Yates shuffle
+// drawn from `seed` alone, so every redraw of the same entry gets the same order.
+export function sceneOrder(n: number, seed: number): number[] {
+  let a = (Math.floor(Math.abs(seed)) % 0x100000000 ^ Math.imul(n, 0x9e3779b1)) >>> 0
+  const rnd = () => {
+    a = (a + 0x6d2b79f5) >>> 0
+    let x = Math.imul(a ^ (a >>> 15), a | 1)
+    x ^= x + Math.imul(x ^ (x >>> 7), x | 61)
+    return ((x ^ (x >>> 14)) >>> 0) / 0x100000000
+  }
+  const order = Array.from({ length: n }, (_, i) => i)
+  for (let i = n - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1))
+    const held = order[i] as number
+    order[i] = order[j] as number
+    order[j] = held
+  }
+  return order
+}
+
 class Frame {
   readonly t: number
-  constructor(t: number) {
+  readonly seed: number
+  constructor(t: number, seed: number) {
     this.t = t
+    this.seed = seed
   }
   // A group posed by `anim` at this frame, placed at (x, y); `origin` is where it scales from.
   g(anim: string | null, inner: string, x = 0, y = 0, origin: [number, number] = [0, 0]): string {
@@ -224,11 +271,12 @@ class Frame {
     }
     return x || y ? `<g transform="translate(${x} ${y})">${body}</g>` : body
   }
-  // Shows sub-scene i of n for its slice of a T-second cycle, building only the one on screen.
+  // Shows one sub-scene of n for its slice of a T-second cycle, building only the one on
+  // screen. The slices play in this entry's shuffled order: each scene once per cycle.
   cycle(scenes: (() => string)[], T: number): string {
     const n = scenes.length
-    const i = Math.floor((((this.t % T) + T) % T) / (T / n))
-    return scenes[i]()
+    const i = Math.min(n - 1, Math.floor((((this.t % T) + T) % T) / (T / n)))
+    return (scenes[sceneOrder(n, this.seed)[i] as number] as () => string)()
   }
 }
 
@@ -296,6 +344,10 @@ function mini(f: Frame, x: number, y: number, carry = '', walk = true): string {
   return `<g transform="translate(${x} ${y})">${legs}${body}${carry}</g>`
 }
 
+// sceneSvg mirrors the whole scene; this mirrors `inner` back about the centre of the
+// w columns from x, so a glyph or a screen's contents reads the right way round in place.
+const unflip = (x: number, w: number, inner: string) => `<g transform="translate(${2 * x + w} 0) scale(-1 1)">${inner}</g>`
+
 const SPARK = ['.y.', 'yyy', '.y.']
 const sparkle = (f: Frame, x: number, y: number, d: number, dur = 1.6) => f.g(`tw ${dur}s step-end infinite ${-d}s`, spr(SPARK), x, y)
 
@@ -303,30 +355,32 @@ const BANG = ['.wwww.', 'ww.www', 'ww.www', 'wwwwww', 'ww.www', '.wwww.', '.w...
 const BOX = ['BbbbB', 'bbYbb', 'bbbbb', 'BbbbB']
 const SUN = ['..hhhh..', '.hhhhhh.', 'hhyyyyhh', 'hyyyyyyh', 'hyyyyyyh']
 
-// A horizontally banded backdrop for the right of the band, its left edge dithered.
-function backdrop(bands: [string, number][], x0 = 30): string {
+// A horizontally banded backdrop across the whole scene, solid from the first column:
+// the only fade is the one sceneSvg lays over the right edge. It runs on into the
+// picture's padding: the top band upward, the bottom band downward, and every band
+// past the scene's far edge (the picture's left, once mirrored).
+function backdrop(bands: [string, number][]): string {
   let out = ''
   let y = 0
-  for (const [c, h] of bands) {
-    for (let j = 0; j < h; j++, y++) {
-      out += rect(x0 + 4, y, W - x0 - 4, 1, c)
-      for (let dx = 0; dx < 4; dx++) {
-        const xx = x0 + dx
-        const on = dx === 3 ? (xx + y) % 4 !== 1 : dx === 2 ? (xx + y) % 2 === 0 : dx === 1 ? (xx + y) % 4 === 0 : false
-        if (on) out += rect(xx, y, 1, 1, c)
-      }
-    }
-  }
+  bands.forEach(([c, h], i) => {
+    const top = i === 0 ? y - PAD_Y : y
+    const bottom = i === bands.length - 1 ? y + h + PAD_Y : y + h
+    out += rect(0, top, W + PAD_X, bottom - top, c)
+    y += h
+  })
   return out
 }
 
-// The dotted field that fades in from the left, as in the band's art.
+// The share of the dotted field's cells that hold a dot, the same across the width.
+const DOT_DENSITY = 0.25
+
+// The dotted field behind every scene, even from edge to edge.
 function dots(f: Frame): string {
   let out = ''
+  const p = DOT_DENSITY
   for (let x = 0; x < W; x += 2) {
     for (let y = 1; y < H; y += 2) {
       const r = rnd(x * 31 + y)
-      const p = Math.pow(x / W, 1.6) * 0.6
       if (r < p) {
         out += r < p * 0.12
           ? f.g(`tw ${(2 + rnd(x + y * 7) * 3).toFixed(2)}s step-end infinite ${(-rnd(x * y + 1) * 4).toFixed(2)}s`, rect(x, y, 1, 1, '#555'))
@@ -397,7 +451,7 @@ function working(f: Frame): string {
     const lines = [4, 6, 3, 5]
       .map((w, i) => f.g(`grow 1.6s steps(${w}) infinite ${-i * 0.4}s`, rect(54, 9 + i, w, 1, i % 2 ? 'c' : 'n'), 0, 0, [54, 9 + i]))
       .join('')
-    const laptop = f.g('pull 6s steps(3) infinite', rect(52, 8, 10, 6, 'L') + rect(53, 8, 8, 5, 'k') + lines + rect(50, 14, 14, 1, 'l') + rect(51, 15, 12, 1, 'L'))
+    const laptop = f.g('pull 6s steps(3) infinite', rect(52, 8, 10, 6, 'L') + rect(53, 8, 8, 5, 'k') + unflip(53, 8, lines) + rect(50, 14, 14, 1, 'l') + rect(51, 15, 12, 1, 'L'))
     const bits = [0, 0.5, 1, 1.5].map((d, i) => f.g(`rise 2s linear infinite ${-d}s`, i % 2 ? spr(['n', 'n', 'n']) : spr(['nn', 'nn', 'nn']), 54 + i * 2, 6)).join('')
     return laptop + bits + clawd(f, 64, 10, { eyes: 'focus', bob: 'bob .6s step-end infinite', armL: 'bob .3s step-end infinite', armR: 'bob .3s step-end infinite -.15s' })
   }
@@ -442,12 +496,12 @@ function working(f: Frame): string {
 
   const analyze = () =>
     rect(36, 2, 22, 13, 'L') + rect(37, 3, 20, 11, 'k') + rect(45, 15, 4, 2, 'L') + rect(42, 17, 10, 1, 'L') +
-    [2, 5, 3, 7, 4, 8]
+    unflip(37, 20, [2, 5, 3, 7, 4, 8]
       .map((h, i) => f.g(`growY 3s steps(${h}) infinite ${-i * 0.3}s`, rect(39 + i * 3, 13 - h, 2, h, i % 2 ? 'c' : 'n'), 0, 0, [40 + i * 3, 13]))
-      .join('') +
+      .join('')) +
     clawd(f, 68, 10, { eyes: 'focus', armLUp: true }) +
     f.g('magscan 5s steps(10) infinite', spr(['.lll...', 'lcccl..', 'lcccl..', 'lcccl..', '.lllb..', '....bb.', '.....bb']), 58, 5) +
-    f.g('tw 5s step-end infinite', spr(['www', '..w', '.ww', '...', '.w.']), 78, 1)
+    f.g('tw 5s step-end infinite', unflip(0, 3, spr(['www', '..w', '.ww', '...', '.w.'])), 78, 1)
 
   return f.cycle([typing, papers, delegate, boxes, office, analyze], 36)
 }
@@ -490,8 +544,8 @@ function relax(f: Frame): string {
     spr(['r......', 'wr.....', 'rwr....', 'wrwrwrw', 'b.....b', 'b.....b'], 46, 10) +
     clawd(f, 46, 8, { eyes: 'shades', bob: 'bob 3s step-end infinite' }) +
     spr(['..p..', '.ppp.', '..t..', 'cccc.', 'cccc.', '.cc..'], 63, 10) +
-    f.g('riseR 3s linear infinite', spr(['.ww', '.w.', 'ww.']), 58, 5) +
-    f.g('riseR 3s linear infinite -1.5s', spr(['ww', 'w.', 'w.']), 52, 5)
+    f.g('riseR 3s linear infinite', unflip(0, 3, spr(['.ww', '.w.', 'ww.'])), 58, 5) +
+    f.g('riseR 3s linear infinite -1.5s', unflip(0, 2, spr(['ww', 'w.', 'w.'])), 52, 5)
 
   const fishing = () =>
     backdrop([['V', 4], ['s', 4], ['V', 3], ['U', 7]]) +
@@ -537,10 +591,10 @@ function relax(f: Frame): string {
 
   const barbecue = () => {
     let fence = ''
-    for (let x = 35; x < W; x += 3) fence += rect(x, 7, 2, 6, 'w')
+    for (let x = 2; x < W + PAD_X; x += 3) fence += rect(x, 7, 2, 6, 'w')
     return (
       backdrop([['C', 13], ['n', 2], ['N', 3]]) +
-      fence + rect(34, 9, 66, 1, 'w') +
+      fence + rect(0, 9, W + PAD_X, 1, 'w') +
       spr(['KKKKKKKKKKKK', '.GGGGGGGGGG.', '..GGGGGGGG..', '...G....G...', '...G....G...', '..GG....GG..'], 46, 11) +
       f.g('on .6s step-end infinite', rect(49, 12, 6, 1, 'd') + rect(56, 12, 1, 1, 'f')) +
       f.g('off .6s step-end infinite', rect(48, 12, 2, 1, 'f') + rect(51, 12, 6, 1, 'd')) +
@@ -556,7 +610,7 @@ function relax(f: Frame): string {
   const drive = () => {
     const palmSmall = rect(0, 4, 1, 8, 'B') + spr(['.N.N.', 'NNNNN', 'N.N.N'], -2, 2)
     let dashes = ''
-    for (let x = 40; x < W + 8; x += 8) dashes += rect(x, 16, 4, 1, 'y')
+    for (let x = 0; x < W + PAD_X + 8; x += 8) dashes += rect(x, 16, 4, 1, 'y')
     const car = spr([
       '.................c....',
       '.................c....',
@@ -583,15 +637,93 @@ function relax(f: Frame): string {
   return f.cycle([sunset, fishing, hammockScene, campfire, barbecue, drive], 48)
 }
 
-// One still frame of `mood`, `t` seconds after it began.
-export function sceneSvg(mood: Mood, t: number): string {
-  const f = new Frame(t)
+// The fade: band-colored pixels over the finished scene, denser toward the right edge
+// by an ordered 4x4 Bayer threshold until the last column is solid. Built once, so it
+// is the same on every frame and never shimmers.
+const BAYER = [
+  [0, 8, 2, 10],
+  [12, 4, 14, 6],
+  [3, 11, 1, 9],
+  [15, 7, 13, 5],
+]
+const FADE = (() => {
+  const x0 = VIEW_COLS - FADE_COLUMNS
+  if (GRADIENT_FADE) {
+    return (
+      `<defs><linearGradient id="fade" x1="0" y1="0" x2="1" y2="0">` +
+      `<stop offset="0" stop-color="${BAND_BG}" stop-opacity="0"/><stop offset="1" stop-color="${BAND_BG}" stop-opacity="1"/>` +
+      `</linearGradient></defs>` +
+      `<rect x="${x0}" y="${-PAD_Y}" width="${FADE_COLUMNS}" height="${H + 2 * PAD_Y}" fill="url(#fade)"/>`
+    )
+  }
+  let px = ''
+  for (let k = 0; k < FADE_COLUMNS; k++) {
+    const x = x0 + k
+    const level = (16 * (k + 1)) / FADE_COLUMNS
+    for (let y = -PAD_Y; y < H + PAD_Y; y++) {
+      if (((BAYER[((y % 4) + 4) % 4] as number[])[x % 4] as number) < level) px += `<rect x="${x}" y="${y}" width="1" height="1" fill="${BAND_BG}"/>`
+    }
+  }
+  return px
+})()
+
+// The picture comes in two cuts. 'bleed' is the padded one the band clips on three
+// sides; its own outline follows the band's left edge and rounded corners, measured
+// in the desktop app in CSS pixels of the 216x104 output (one-row band): the band's
+// left edge at x = EDGE_LEFT, its top at y = EDGE_TOP, its bottom at y = EDGE_BOTTOM,
+// its corners of radius CORNER_RADIUS. 'inline' is the scene without padding, for
+// normal flow, all four corners rounded at INLINE_RADIUS.
+export type SceneVariant = 'bleed' | 'inline'
+const EDGE_LEFT = 8
+const EDGE_TOP = 8.5
+const EDGE_BOTTOM = 101.5
+const CORNER_RADIUS = 10
+const INLINE_RADIUS = 6
+
+const svgOpen = (x: number, y: number, w: number, h: number) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x} ${y} ${w} ${h}" width="${w * SCALE}" height="${h * SCALE}" shape-rendering="crispEdges">`
+// The clip shapes. The bleed one is written in output pixels and scaled into the grid.
+const BLEED_CLIP = (() => {
+  const [L, T, B, r] = [EDGE_LEFT, EDGE_TOP, EDGE_BOTTOM, CORNER_RADIUS]
+  const d = `M${L + r},${T} H${(VIEW_COLS + PAD_X) * SCALE} V${B} H${L + r} A${r} ${r} 0 0 1 ${L},${B - r} V${T + r} A${r} ${r} 0 0 1 ${L + r},${T} Z`
+  return `<path transform="translate(${-PAD_X} ${-PAD_Y}) scale(${1 / SCALE})" d="${d}" shape-rendering="geometricPrecision"/>`
+})()
+const INLINE_CLIP = `<rect x="0" y="0" width="${VIEW_COLS}" height="${H}" rx="${INLINE_RADIUS / SCALE}" shape-rendering="geometricPrecision"/>`
+
+// One still frame of `mood`, `t` seconds after it began. The art was composed for the
+// right end of the band, so the whole scene is mirrored to sit against the left edge;
+// the fade is laid over it unmirrored. `seed` is fixed for one entry
+// into the mood (its timestamp) and picks the order its scenes play in.
+export function sceneSvg(mood: Mood, t: number, seed = 0, variant: SceneVariant = 'bleed'): string {
+  if (CALIBRATE && variant === 'bleed') return CARD
+  const f = new Frame(t, seed)
   const body = mood === 'working' ? working(f) : mood === 'done' ? done(f) : mood === 'relax' ? relax(f) : idle(f)
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W * 3}" height="${H * 3}" shape-rendering="crispEdges">` +
-    `<rect x="-2" y="-2" width="${W + 4}" height="${H + 4}" fill="${BAND_BG}"/>${dots(f)}${body}</svg>`
-  )
+  const drawn =
+    `<rect x="${-PAD_X - 2}" y="${-PAD_Y - 2}" width="${W + PAD_X + 4}" height="${H + 2 * PAD_Y + 4}" fill="${BAND_BG}"/>` +
+    `<g transform="translate(${W} 0) scale(-1 1)">${dots(f)}${body}</g>${FADE}`
+  if (!PORTRAIT) return `${svgOpen(0, 0, W, H)}${drawn}</svg>`
+  const [open, clip] =
+    variant === 'bleed' ? [svgOpen(-PAD_X, -PAD_Y, VIEW_COLS + PAD_X, H + 2 * PAD_Y), BLEED_CLIP] : [svgOpen(0, 0, VIEW_COLS, H), INLINE_CLIP]
+  return `${open}<defs><clipPath id="edge">${clip}</clipPath></defs><g clip-path="url(#edge)">${drawn}</g></svg>`
 }
 
-export const SCENE_WIDTH = W * 3
-export const SCENE_HEIGHT = H * 3
+// The test card, in CSS pixels (1 unit = 1 px): a 1 px line every 8 px, vertical ones
+// red at x = 0, 16, 32... and green at x = 8, 24, 40...; horizontal ones blue at
+// y = 0, 16, 32... and yellow at y = 8, 24, 40...; 3 px white lines centred on x = 40
+// and y = 40 (pixels 39 to 41), and a 3 px magenta line centred on y = 88. No fade.
+const CARD = (() => {
+  const w = (VIEW_COLS + PAD_X) * SCALE
+  const h = (H + 2 * PAD_Y) * SCALE
+  const line = (x: number, y: number, lw: number, lh: number, c: string) => `<rect x="${x}" y="${y}" width="${lw}" height="${lh}" fill="${c}"/>`
+  let out = line(0, 0, w, h, '#303030')
+  for (let x = 0; x < w; x += 8) out += line(x, 0, 1, h, x % 16 ? '#34c759' : '#ff3b30')
+  for (let y = 0; y < h; y += 8) out += line(0, y, w, 1, y % 16 ? '#ffd60a' : '#0a84ff')
+  out += line(39, 0, 3, h, '#ffffff') + line(0, 39, w, 3, '#ffffff') + line(0, 87, w, 3, '#ff2d95')
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" shape-rendering="crispEdges">${out}</svg>`
+})()
+
+// The picture's size in CSS pixels, and the part of it that is scene, not padding.
+export const SCENE_WIDTH = (VIEW_COLS + PAD_X) * SCALE
+export const SCENE_HEIGHT = (H + 2 * PAD_Y) * SCALE
+export const SCENE_BODY_WIDTH = VIEW_COLS * SCALE
+export const SCENE_BODY_HEIGHT = H * SCALE

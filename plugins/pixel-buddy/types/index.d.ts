@@ -3,7 +3,7 @@ export type Limit = { kind: string; percentUsed: number; resetsAt?: string }
 export type Ctx = { tokens?: number; window: number; percent?: number }
 
 // A mirror of monster-compact's contract (its types/index.d.ts). That plugin owns and
-// writes the value; this one only reads it, to draw the compaction ring. Keep in step.
+// writes the value; this one only reads it, to draw the context tick and the to-compact column. Keep in step.
 export type Compaction = {
   /** Context percent at which the plugin asks for compaction. */
   compactAtPercent: number

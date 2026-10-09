@@ -1,12 +1,12 @@
 {
   "name": "monsterlag-plugins",
-  "owner": { "name": "hamymarnie" },
+  "owner": { "name": "monsterlag" },
   "description": "A collection of plugins for Claude Code",
   "plugins": [
     {
       "name": "pixel-buddy",
       "source": "./plugins/pixel-buddy",
-      "description": "Usage rings, a pixel-art mascot, and a prompt-cache timer + context meter"
+      "description": "Usage meters, a pixel-art mascot, and a prompt-cache timer + context meter"
     }
   ]
 }
