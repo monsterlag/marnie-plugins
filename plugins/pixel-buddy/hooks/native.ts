@@ -8,14 +8,15 @@ import { scenes as relax } from './native-relax'
 import { scenes as working } from './native-working'
 
 // The event scenes, by name. `compaction` and `subagents` cut into the rotation when
-// their cue comes (see rotation.ts); `fallback` is drawn and not yet cued by anything.
+// their cue comes (see rotation.ts); `waiting` and `fallback` have no cue and play as
+// ordinary rotation scenes below.
 export const eventScenes: Record<string, NamedScene> = Object.fromEntries(events.map(s => [s.name, s]))
 
-// What each mood plays in rotation. `waiting` is an event scene by file and an ordinary
-// idle scene by use.
+// What each mood plays in rotation. `waiting` and `fallback` are event scenes by file and
+// ordinary idle and working scenes by use.
 export const nativeScenes: Record<Mood, NamedScene[]> = {
   idle: [...idle, ...events.filter(s => s.name === 'waiting')],
-  working,
+  working: [...working, ...events.filter(s => s.name === 'fallback')],
   done,
   relax,
 }
