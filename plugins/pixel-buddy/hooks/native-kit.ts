@@ -13,7 +13,7 @@
 // - A scene file exports `scenes: NamedScene[]`; hooks/native.ts lists the files. Use
 //   `import` declarations only (the loader refuses a module holding `import()`), and
 //   nothing from Node: these files run inside the plugin.
-// - To look at a scene: npx tsx plugins/pixel-buddy/tools/preview.ts <group|scene> out.svg
+// - To look at a scene: npx tsx plugins/pixel-buddy/tools/preview.ts <group|scene|all> out.svg
 //   then, on this Mac, qlmanage -t -s 1800 -o <dir> out.svg and read <dir>/out.svg.png.
 
 // The band's own color, painted behind every scene.
@@ -125,16 +125,24 @@ export function backdropFull(bands: [string, number][]): string {
   return out
 }
 
+// The clock the dotted field twinkles on, in seconds: the wrapper sets it before each
+// frame to a time that never restarts, so the dots do not jump when a scene's loop does.
+let dotClock = 0
+export const setDotClock = (seconds: number) => {
+  dotClock = seconds
+}
+
 // The dotted field of the dark scenes over the whole padded picture; a few dots twinkle
-// on a 3 s cycle, each from its own moment.
-export function dotsFull(t: number): string {
+// on a 3 s cycle of the dot clock, each from its own moment. `_t` (the scene's loop
+// time) is accepted and not used.
+export function dotsFull(_t?: number): string {
   let out = ''
   for (let x = FULL_X; x < FULL_X + FULL_W; x += 2) {
     for (let y = FULL_Y + 1; y < FULL_Y + FULL_H; y += 2) {
       const r = rnd(x * 31 + y + 400)
       if (r >= DOT_DENSITY) continue
       if (r < DOT_DENSITY * 0.2) {
-        const at = into(t, 3, rnd(x * y + 7) * 3)
+        const at = into(dotClock, 3, rnd(x * y + 7) * 3)
         out += rect(x, y, 1, 1, at < 0.9 ? '#555' : at < 1.2 || at > 2.7 ? '#3c3c3c' : '#2c2c2c')
       } else out += rect(x, y, 1, 1, r < DOT_DENSITY * 0.45 ? '#3c3c3c' : '#2c2c2c')
     }

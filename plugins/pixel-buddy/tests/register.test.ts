@@ -3,6 +3,8 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import type { Compaction } from '../types'
+import { eventScenes } from '../hooks/native'
+import { compactionFired, pick } from '../hooks/rotation'
 import { publisher } from './fixtures/publisher'
 
 const NOW = Date.parse('2026-10-07T12:00:00.000Z')
@@ -100,5 +102,23 @@ describe('register', () => {
     expect((await ui.findAll({ type: 'Text' })).map(t => [t.text, t.props])).toEqual([
       ['5h 41% 3h 12m · 7d 19% 6d 0h · ctx 80k/200k 40% · 40k left · saved ~172k', { dimColor: true }],
     ])
+  })
+
+  test('rotation: a compaction cuts in at the next loop boundary for two loops, then the rotation resumes', () => {
+    expect(compactionFired({ count: 1, lastAt: 10 }, { count: 2, lastAt: 20 })).toBe(true)
+    expect(compactionFired({ count: 1, lastAt: 10 }, { count: 1, lastAt: 10 })).toBe(false)
+    const SEED = 7
+    const playing = pick('working', 4, SEED)
+    const boundary = playing.scene.loop
+    const span = 2 * (eventScenes.compaction?.scene.loop ?? 0)
+    const cues = { compactions: [4] }
+    // Noticed 4 s in: the scene on show finishes its loop first.
+    expect(pick('working', boundary - 0.1, SEED, cues).name).toBe(playing.name)
+    expect(pick('working', boundary + 0.1, SEED, cues).name).toBe('compaction')
+    expect(pick('working', boundary + span - 0.1, SEED, cues).name).toBe('compaction')
+    // Then the rotation is where it would have been at that boundary.
+    const resumed = pick('working', boundary + span + 0.1, SEED, cues)
+    const undisturbed = pick('working', boundary + 0.1, SEED)
+    expect([resumed.name, resumed.local]).toEqual([undisturbed.name, undisturbed.local])
   })
 })

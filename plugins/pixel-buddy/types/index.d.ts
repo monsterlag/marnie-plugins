@@ -1,5 +1,8 @@
 export type Mood = 'idle' | 'working' | 'done' | 'relax'
 export type Limit = { kind: string; percentUsed: number; resetsAt?: string }
+// A sub-agent run as the band tracks it: when it was spawned and when it finished (epoch
+// ms; null while it runs). `id` is absent for one the engine gave no id.
+export type AgentRun = { id?: string; from: number; until: number | null }
 export type Ctx = { tokens?: number; window: number; percent?: number }
 
 // A mirror of monster-compact's contract (its types/index.d.ts). That plugin owns and
@@ -39,6 +42,9 @@ declare module 'claude-code' {
       minute: number
       ctx: Ctx | null
       limits: Limit[]
+      compSeen: { count: number; lastAt: number | null } | null
+      compactions: number[]
+      agents: AgentRun[]
     }
     'monster-compact': { compaction: Compaction }
   }

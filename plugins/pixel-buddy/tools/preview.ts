@@ -3,7 +3,7 @@
 //
 //   npx tsx plugins/pixel-buddy/tools/preview.ts <group|scene-name> <out.svg>
 //
-// <group> is idle, working, done, relax or events. Each scene gets 8 frames spread evenly
+// <group> is idle, working, done, relax or events; `all` is every scene. Each scene gets 8 frames spread evenly
 // over its loop in the bleed cut and 4 in the inline cut, with the time under each. The
 // page is square, so a thumbnail shows all of it:
 //
@@ -12,14 +12,16 @@ import { writeFileSync } from 'node:fs'
 
 import { eventScenes, nativeScenes } from '../hooks/native'
 import type { NamedScene } from '../hooks/native-kit'
-import { SCENE_BODY_HEIGHT, SCENE_BODY_WIDTH, SCENE_HEIGHT, SCENE_WIDTH, nativeSvg } from '../hooks/scene'
+import { SCENE_BODY_HEIGHT, SCENE_BODY_WIDTH, SCENE_HEIGHT, SCENE_WIDTH, sceneSvg } from '../hooks/scene'
 
 const [what, out] = process.argv.slice(2)
 const groups: Record<string, NamedScene[]> = { ...nativeScenes, events: Object.values(eventScenes) }
 const all = Object.values(groups).flat()
-const picked = what && groups[what] ? groups[what] : all.filter(s => s.name === what)
+// `waiting` is in both the idle rotation and the events; `all` shows each scene once.
+const unique = all.filter((s, i) => all.findIndex(o => o.name === s.name) === i)
+const picked = what === 'all' ? unique : what && groups[what] ? groups[what] : unique.filter(s => s.name === what)
 if (!what || !out || !picked.length) {
-  console.error(`usage: preview.ts <group|scene-name> <out.svg>\ngroups: ${Object.keys(groups).join(', ')}\nscenes: ${all.map(s => s.name).join(', ') || '(none)'}`)
+  console.error(`usage: preview.ts <group|scene-name> <out.svg>\ngroups: ${Object.keys(groups).join(', ')}, all\nscenes: ${unique.map(s => s.name).join(', ') || '(none)'}`)
   process.exit(1)
 }
 
@@ -43,7 +45,7 @@ function block({ name, scene }: NamedScene, x0: number, y0: number): string {
       const yy = y + Math.floor(k / PER) * (h + LABEL + GAP)
       const id = `${name}-${variant}-${k}`
       // Each frame carries the same ids; make them the frame's own within the one page.
-      body += nativeSvg(scene, t, variant)
+      body += sceneSvg(scene, t, variant)
         .replace('<svg ', `<svg x="${x}" y="${yy}" `)
         .replaceAll('id="edge"', `id="edge-${id}"`).replaceAll('url(#edge)', `url(#edge-${id})`)
         .replaceAll('id="fade"', `id="fade-${id}"`).replaceAll('url(#fade)', `url(#fade-${id})`)

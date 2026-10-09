@@ -1,8 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Compaction, Ctx, Limit, Mood } from '../types'
-import { SCENE_BODY_HEIGHT, SCENE_BODY_WIDTH, SCENE_HEIGHT, SCENE_WIDTH, doneSeconds, sceneSvg } from './scene'
+import type { AgentRun, Compaction, Ctx, Limit, Mood } from '../types'
+import { compactionFired, doneSeconds, pick } from './rotation'
+import { SCENE_BODY_HEIGHT, SCENE_BODY_WIDTH, SCENE_HEIGHT, SCENE_WIDTH, sceneSvg } from './scene'
 
 const mood = atom({ plugin: 'pixel-buddy', key: 'mood' } as const, 'idle' as Mood)
 const moodAt = atom({ plugin: 'pixel-buddy', key: 'moodAt' } as const, 0)
@@ -12,6 +13,11 @@ const now = atom({ plugin: 'pixel-buddy', key: 'now' } as const, 0)
 const minute = atom({ plugin: 'pixel-buddy', key: 'minute' } as const, 0)
 const ctx = atom({ plugin: 'pixel-buddy', key: 'ctx' } as const, null as Ctx | null)
 const limits = atom({ plugin: 'pixel-buddy', key: 'limits' } as const, [] as Limit[])
+// The compaction value as last looked at, when each compaction since this mood began was
+// noticed, and the sub-agents spawned and not yet forgotten: the cues for event scenes.
+const compSeen = atom({ plugin: 'pixel-buddy', key: 'compSeen' } as const, null as { count: number; lastAt: number | null } | null)
+const compactions = atom({ plugin: 'pixel-buddy', key: 'compactions' } as const, [] as number[])
+const agents = atom({ plugin: 'pixel-buddy', key: 'agents' } as const, [] as AgentRun[])
 // monster-compact's value, read only: undefined while that plugin is not installed.
 const compaction = { plugin: 'monster-compact', key: 'compaction' } as const
 
@@ -20,6 +26,13 @@ const RELAX_MS = 4 * 60_000
 // The mascot is drawn as still frames at this interval: ten a second, the most the
 // desktop surface redraws.
 const FRAME_MS = 100
+// A sub-agent the engine gave no id (so its end is never reported) counts as running
+// for this long after its spawn; one with an id that never reports an end, for
+// SUBAGENT_STALE_S.
+const SUBAGENT_LINGER_S = 45
+const SUBAGENT_STALE_S = 30 * 60
+// A compaction noticed up to this long before a mood began still plays, at its start.
+const COMPACTION_CARRY_S = 20
 
 // Layout, tuned by eye in the desktop app. Box gaps are in character
 // cells; the bar is in CSS pixels.
@@ -121,25 +134,38 @@ function ctxBarSvg(percent: number): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 39 8" width="39" height="8" shape-rendering="crispEdges">${px}</svg>`
 }
 
+// A new entry into a mood: its clock starts, and the cues of the last one are dropped
+// (a sub-agent still running stays, and a compaction only just noticed).
 async function setMood($: EngineInterface, m: Mood) {
   const t = await $.clock.now()
+  await update($, compactions, list => list.filter(at => t - at < COMPACTION_CARRY_S * 1000))
+  await update($, agents, list => list.filter(a => a.until === null && t - a.from < SUBAGENT_STALE_S * 1000))
   await update($, moodAt, () => t)
   await update($, mood, () => m)
 }
 
-// Which mood's scene shows `elapsed` seconds into a mood: done hands off to relax, relax
-// to idle. `from` is the mood it took over from and how long that ran, so a scene the
-// two share keeps its clock. `seed` is the entry's, which fixes how long done lasts.
-type Shown = { mood: Mood; t: number; from?: { mood: Mood; t: number } }
-function sceneFor(m: Mood, elapsed: number, seed: number): Shown {
+// Looks at what monster-compact publishes; another compaction since the last look is
+// noted with its time. The value there at the first look is only remembered.
+async function watchCompaction($: EngineInterface) {
+  const k = published(await read($, compaction))
+  const seen = await read($, compSeen)
+  const current = k ? { count: k.count, lastAt: k.lastAt } : null
+  if (current && seen && compactionFired(seen, current)) {
+    const t = await $.clock.now()
+    await update($, compactions, list => [...list, t])
+  }
+  if (current?.count !== seen?.count || current?.lastAt !== seen?.lastAt || !current !== !seen) await update($, compSeen, () => current)
+}
+
+// Which mood's scene shows `elapsed` seconds into a mood, and how far into that mood:
+// done hands off to relax after its one loop, relax to idle. `seed` is the entry's.
+function sceneFor(m: Mood, elapsed: number, seed: number): { mood: Mood; t: number } {
   const relaxS = RELAX_MS / 1000
   if (m === 'done') {
     const doneS = doneSeconds(seed)
-    if (elapsed < doneS) return { mood: 'done', t: elapsed }
-    const next = sceneFor('relax', elapsed - doneS, seed)
-    return next.from ? next : { ...next, from: { mood: 'done', t: doneS } }
+    return elapsed < doneS ? { mood: 'done', t: elapsed } : sceneFor('relax', elapsed - doneS, seed)
   }
-  if (m === 'relax' && elapsed >= relaxS) return { mood: 'idle', t: elapsed - relaxS, from: { mood: 'relax', t: relaxS } }
+  if (m === 'relax' && elapsed >= relaxS) return { mood: 'idle', t: elapsed - relaxS }
   return { mood: m, t: elapsed }
 }
 
@@ -189,6 +215,8 @@ export const register: Register = (on, options) => {
       await update($, minute, () => t)
     })
     await update($, moodAt, () => t0)
+    await watchCompaction($)
+    $.clock.every(1_000, () => watchCompaction($))
     $.clock.every(FRAME_MS, async () => {
       const t = await $.clock.now()
       await update($, frame, () => t)
@@ -220,10 +248,32 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  // A sub-agent is starting: note it, so the working rotation can favour `subagents`
+  // while it runs. The spawn's own answer is passed on untouched, whatever the note does.
+  on('agent.spawn', async ($, e, next) => {
+    const started = await next(e)
+    try {
+      if (!('deny' in started && started.deny)) {
+        const t = await $.clock.now()
+        const id = 'agentId' in started ? started.agentId : undefined
+        const run: AgentRun = id ? { id, from: t, until: null } : { from: t, until: t + SUBAGENT_LINGER_S * 1000 }
+        await update($, agents, list => [...list, run])
+      }
+    } catch {
+      // The band's bookkeeping must never cost a spawn.
+    }
+    return started
+  })
+
   // Task complete: the party plays once, then Claude relaxes, then idles. The hand-offs
   // are worked out from the clock on each frame (see sceneFor), so no timer can be lost.
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId) return next(e)
+    if (e.agentId) {
+      // A sub-agent's own turn ended: it is no longer running.
+      const t = await $.clock.now()
+      await update($, agents, list => list.map(a => (a.id === e.agentId && a.until === null ? { ...a, until: t } : a)))
+      return next(e)
+    }
     await setMood($, e.isAborted || e.reason === 'error' ? 'idle' : 'done')
     return next(e)
   })
@@ -298,7 +348,15 @@ export const register: Register = (on, options) => {
     const m: Mood = e.props.isWorking ? 'working' : stored === 'working' ? 'idle' : stored
     const tFrame = await read($, frame)
     const since = m === stored ? await read($, moodAt) : 0
-    const { mood: shownMood, t: sceneT, from: sceneFrom } = sceneFor(m, Math.max(0, (tFrame - since) / 1000), since)
+    const elapsed = Math.max(0, (tFrame - since) / 1000)
+    const { mood: shownMood, t: sceneT } = sceneFor(m, elapsed, since)
+    // The cues, as seconds into the mood on show.
+    const moodAtMs = since + (elapsed - sceneT) * 1000
+    const into = (ms: number) => (ms - moodAtMs) / 1000
+    const shown = pick(shownMood, sceneT, since, {
+      compactions: (await read($, compactions)).map(into).map(at => (at < 0 && at > -COMPACTION_CARRY_S ? 0 : at)),
+      agents: (await read($, agents)).map(a => ({ from: Math.max(0, into(a.from)), until: into(a.until ?? a.from + SUBAGENT_STALE_S * 1000) })),
+    })
 
     const column = (s: Stat) => (
       <Box key={s.key} flexDirection="column" flexShrink={0}>
@@ -329,7 +387,7 @@ export const register: Register = (on, options) => {
 
     const mascotSvg = (variant: 'bleed' | 'inline') => (
       <Svg
-        source={sceneSvg(shownMood, sceneT, since, variant, sceneFrom)}
+        source={sceneSvg(shown.scene, shown.local, variant, tFrame / 1000)}
         alt={`Claude is ${shownMood === 'done' ? 'celebrating' : shownMood === 'relax' ? 'relaxing' : shownMood}`}
         width={variant === 'bleed' ? SCENE_WIDTH : SCENE_BODY_WIDTH}
         height={variant === 'bleed' ? SCENE_HEIGHT : SCENE_BODY_HEIGHT}
