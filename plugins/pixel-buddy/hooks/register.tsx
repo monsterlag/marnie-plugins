@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Compaction, Ctx, Limit, Mood } from '../types'
-import { DONE_SECONDS, SCENE_BODY_HEIGHT, SCENE_BODY_WIDTH, SCENE_HEIGHT, SCENE_WIDTH, sceneSvg } from './scene'
+import { SCENE_BODY_HEIGHT, SCENE_BODY_WIDTH, SCENE_HEIGHT, SCENE_WIDTH, doneSeconds, sceneSvg } from './scene'
 
 const mood = atom({ plugin: 'pixel-buddy', key: 'mood' } as const, 'idle' as Mood)
 const moodAt = atom({ plugin: 'pixel-buddy', key: 'moodAt' } as const, 0)
@@ -127,14 +127,19 @@ async function setMood($: EngineInterface, m: Mood) {
   await update($, mood, () => m)
 }
 
-// Which scene shows `elapsed` seconds into a mood: done hands off to relax, relax to idle.
-function sceneFor(m: Mood, elapsed: number): { mood: Mood; t: number } {
+// Which mood's scene shows `elapsed` seconds into a mood: done hands off to relax, relax
+// to idle. `from` is the mood it took over from and how long that ran, so a scene the
+// two share keeps its clock. `seed` is the entry's, which fixes how long done lasts.
+type Shown = { mood: Mood; t: number; from?: { mood: Mood; t: number } }
+function sceneFor(m: Mood, elapsed: number, seed: number): Shown {
   const relaxS = RELAX_MS / 1000
   if (m === 'done') {
-    if (elapsed < DONE_SECONDS) return { mood: 'done', t: elapsed }
-    return sceneFor('relax', elapsed - DONE_SECONDS)
+    const doneS = doneSeconds(seed)
+    if (elapsed < doneS) return { mood: 'done', t: elapsed }
+    const next = sceneFor('relax', elapsed - doneS, seed)
+    return next.from ? next : { ...next, from: { mood: 'done', t: doneS } }
   }
-  if (m === 'relax' && elapsed >= relaxS) return { mood: 'idle', t: elapsed - relaxS }
+  if (m === 'relax' && elapsed >= relaxS) return { mood: 'idle', t: elapsed - relaxS, from: { mood: 'relax', t: relaxS } }
   return { mood: m, t: elapsed }
 }
 
@@ -293,7 +298,7 @@ export const register: Register = (on, options) => {
     const m: Mood = e.props.isWorking ? 'working' : stored === 'working' ? 'idle' : stored
     const tFrame = await read($, frame)
     const since = m === stored ? await read($, moodAt) : 0
-    const { mood: shownMood, t: sceneT } = sceneFor(m, Math.max(0, (tFrame - since) / 1000))
+    const { mood: shownMood, t: sceneT, from: sceneFrom } = sceneFor(m, Math.max(0, (tFrame - since) / 1000), since)
 
     const column = (s: Stat) => (
       <Box key={s.key} flexDirection="column" flexShrink={0}>
@@ -324,7 +329,7 @@ export const register: Register = (on, options) => {
 
     const mascotSvg = (variant: 'bleed' | 'inline') => (
       <Svg
-        source={sceneSvg(shownMood, sceneT, since, variant)}
+        source={sceneSvg(shownMood, sceneT, since, variant, sceneFrom)}
         alt={`Claude is ${shownMood === 'done' ? 'celebrating' : shownMood === 'relax' ? 'relaxing' : shownMood}`}
         width={variant === 'bleed' ? SCENE_WIDTH : SCENE_BODY_WIDTH}
         height={variant === 'bleed' ? SCENE_HEIGHT : SCENE_BODY_HEIGHT}
