@@ -35,7 +35,7 @@ marketplace is named `monsterlag-plugins`.
   when the published `count` rises; `subagents` is favoured while a sub-agent runs
   (`agent.spawn` until a `turn.complete` carrying its `agentId`, or a 45 s decay).
 
-## Frame load (2026-10-09, uncommitted until gated and pushed)
+## Frame load (2026-10-09, `297f4d8`, pushed ungated on the owner's say-so)
 
 - The owner reported the band freezing, then vanishing, and the whole desktop app crawling with
   five sessions open. Found: every session ran the 100 ms frame timer for its whole life, idle or
@@ -45,7 +45,7 @@ marketplace is named `monsterlag-plugins`.
 - Fix: `frameDue` in `hooks/rotation.ts`. A session animates while its mood is `working`, and for
   `QUIET_ANIMATE_MS` (2 min) after a quiet mood begins; then the picture is a still, redrawn once
   per `STILL_MS` (16 s). `FRAME_MS` is back to 150.
-- Not done: sessions already open keep the old timer until `/reload-plugins` or an app restart.
+- Not verified in the app: that this cures the freezing and the renderer growth. Sessions open before the update keep the old timer until `/reload-plugins` or an app restart.
 
 ## Files
 
