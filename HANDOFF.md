@@ -152,12 +152,68 @@ longer than 16 s. Its findings, and what became of each:
 - **Tests** (low): no test for a working session still animating past the window through the
   timer, for a mood change while the frame is stale, or for the stuck-`working` case.
 
+### Profile of the renderer (2026-10-09, 20:46 to 21:15)
+
+Taken with `sample <pid> 8` (which threads are busy), `vmmap --summary <pid>` (memory by region)
+and `ps` CPU-time differences. The app's binary is stripped: thread names can be trusted, the
+function names `sample` prints for it cannot.
+
+| | Old build, 20:46 | Fixed build, quiet animation | Fixed build, stills |
+|---|---|---|---|
+| Renderer main thread busy | 99% | 7% | 6% |
+| Renderer CPU overall | ~100% | 12% (70 s) | 10% (91 s) |
+| Renderer memory (RSS) | 4.4 GB | 1.18 GB | 1.18 GB |
+| Desktop sessions open | 5 | 4 | 4 |
+
+- **The old build's main thread was saturated.** That thread draws the interface and takes input,
+  which accounts for the slowness, the stutter and the freezing. Nothing else in the process was
+  busy (compositor and pool threads at 2-3%).
+- **One session's animation costs about 2% of a core on the fixed build**: the difference between
+  the two phases of one session after a turn, first animating at 150 ms with nothing streaming,
+  then on stills. The other sessions did a little work in the same window, so it is approximate.
+- **So the frames alone do not add up to the old 100%.** Five sessions at ten a second, scaled from
+  that 2%, come to roughly 15%. The saturation therefore probably came from what had piled up
+  (4 GB) and the work of managing it, with the picture stream as the feeder. This step is
+  inference.
+- **The memory is mostly JavaScript heap.** Of about 1.0 GB dirty at 21:09, 776 MB was in the region
+  tagged "App-Specific Tag 16" and 270 MB in "Tag 14". By Chromium's convention those are the
+  JavaScript engine's heap and its general allocator; the mapping is from memory of that
+  convention, not checked against this build.
+- **The size fits.** The old build sent about 450 KB of SVG text a second across five sessions, which
+  is 1.6 GB an hour if all of it were kept; the climb seen was 0.8-1.0 GB an hour.
+- **It can be reclaimed under light load.** Over four quiet minutes the Tag 16 region fell from 776
+  to 568 MB and the footprint from 944 to 731 MB.
+- **While a session works**, one pool thread ran 71% busy with the main thread at 10%. What it does
+  is unknown; it was not seen in either quiet phase.
+
+Not a controlled comparison: the two builds were sampled at different memory sizes and session
+counts. What held the 4 GB is still not known. A heap snapshot from the app's developer tools
+would show it; that needs a developer setting turned on in the app, which the owner has not
+approved.
+
+### The running check, and the review of it
+
+A session-only job in the session that did this work runs `loadcheck.py` (in that session's
+scratch folder, not in this repo) at :07 and :42. It fits a slope to the app log's one-a-minute
+renderer readings and records how much CPU the session processes burned, as a stand-in for how
+many pictures were sent. A second Fable review called the first version of this plan weak, and
+its points stand for any later test:
+
+- a quiet evening passes whether or not the fix works, so a flat reading while the sessions sat
+  idle is no evidence;
+- the pass has to be a number: under 100 MB an hour over two hours in which the sessions worked
+  (the broken build did 800-1000); over 300, or past 2.5 GB, is a fail;
+- check-to-check differences at this spacing are noise;
+- there is no control. One evening with the plugin disabled, same sessions and readings, is the
+  only thing that would turn a pass from evidence into proof. Not done;
+- the fixed build starts at 1.07-1.30 GB against 560-690 MB the day before, unexplained.
+
 ### Not proven, and how to check
 
 - That the plugin caused the renderer's load, and that the fix cures it. Check: several desktop
   sessions open for some hours, then the `[process-memory]` renderer figures. Flat near where it
   starts is a cure; a steady climb is not. `sample <renderer pid>` or the app's developer tools
-  would say what it is busy with.
+  would say what it is busy with (first results under "Profile of the renderer").
 - Why the band vanished. Check: a session started with a debug log, looking for
   `pixel-buddy: ui.render (AbovePrompt)` lines.
 - How often monster-compact writes its value.
