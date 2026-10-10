@@ -29,11 +29,23 @@ marketplace is named `monsterlag-plugins`.
 - **Two layouts**, chosen by `bodyColumns` against `WIDE_MIN_COLUMNS` (84): wide as above with the
   stats spread across the remaining width; narrow with the picture inline on its own row
   (192x72, its own rounded corners) and the stats wrapping underneath.
-- **Scenes:** 22 native scenes on a 48x18 grid, 100 ms tick. Moods: working (7, including
+- **Scenes:** 22 native scenes on a 48x18 grid, 150 ms tick while animating (see "Frame load"). Moods: working (7, including
   `fallback`), done (1, plays once), relax (6), idle (6, including `waiting`). Order is shuffled
   per mood entry; a scene plays whole loops for about 16 s. `compaction` cuts in for two loops
   when the published `count` rises; `subagents` is favoured while a sub-agent runs
   (`agent.spawn` until a `turn.complete` carrying its `agentId`, or a 45 s decay).
+
+## Frame load (2026-10-09, uncommitted until gated and pushed)
+
+- The owner reported the band freezing, then vanishing, and the whole desktop app crawling with
+  five sessions open. Found: every session ran the 100 ms frame timer for its whole life, idle or
+  not, and each tick sends the app a new 8-10 KB picture (59 of 60 frames in a loop are unique).
+  The app's renderer was at ~100% CPU and grew from 1 GB to 4.5 GB within hours of each launch.
+  That the plugin causes the renderer load is inferred from this, not profiled.
+- Fix: `frameDue` in `hooks/rotation.ts`. A session animates while its mood is `working`, and for
+  `QUIET_ANIMATE_MS` (2 min) after a quiet mood begins; then the picture is a still, redrawn once
+  per `STILL_MS` (16 s). `FRAME_MS` is back to 150.
+- Not done: sessions already open keep the old timer until `/reload-plugins` or an app restart.
 
 ## Files
 
@@ -66,8 +78,9 @@ marketplace is named `monsterlag-plugins`.
 
 ## Open
 
-- A stutter while typing was seen once at the 100 ms tick and could not be reproduced or
-  explained. If it returns, set `FRAME_MS` in `register.tsx` back to 150 (upstream's value).
+- Whether an idle mascot that holds still after two minutes is what the owner wants (changed
+  as an emergency fix, without a mockup).
+- A working session still sends about seven pictures a second for as long as the turn runs.
 - `0k left` when context is past the trigger could show the overrun instead.
 - `compaction` and `subagents` cut-ins are verified in the test kit, not yet seen in the app.
 - `WIDE_MIN_COLUMNS` is conservative: there is a range of widths where the wide layout would

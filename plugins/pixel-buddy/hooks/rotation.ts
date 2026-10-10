@@ -10,6 +10,15 @@ export const SLOT_SECONDS = 16
 // The compaction scene plays this many loops, then the rotation goes on where it was.
 export const COMPACTION_LOOPS = 2
 
+// Whether the mascot gets a new frame now. Each frame is a whole new picture for the
+// desktop app to take in, from every open session at once, so only a session someone is
+// likely watching animates: one that is working, or `animateMs` into a quiet mood (the
+// party and the start of the rest). After that the picture holds still and is drawn
+// again once every `stillMs`.
+export function frameDue(mood: Mood, sinceMood: number, sinceFrame: number, animateMs: number, stillMs: number): boolean {
+  return mood === 'working' || sinceMood < animateMs || sinceFrame >= stillMs
+}
+
 // The order a mood's n scenes play in for one entry into it: a Fisher-Yates shuffle
 // drawn from `seed` alone, so every redraw of the same entry gets the same order.
 export function sceneOrder(n: number, seed: number): number[] {

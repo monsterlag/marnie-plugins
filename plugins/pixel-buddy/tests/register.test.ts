@@ -4,7 +4,7 @@ import type { Engine } from 'claude-code/testing'
 
 import type { Compaction } from '../types'
 import { eventScenes } from '../hooks/native'
-import { compactionFired, pick } from '../hooks/rotation'
+import { compactionFired, frameDue, pick } from '../hooks/rotation'
 import { publisher } from './fixtures/publisher'
 
 const NOW = Date.parse('2026-10-07T12:00:00.000Z')
@@ -21,11 +21,14 @@ const ONE: Compaction = { ...NONE, count: 1, lastSaved: 172_000, totalSaved: 172
 // The context bar's tick: 2 px wide, centred on 60% of the 72 px bar.
 const TICK = '<rect x="42.20" y="0" width="2" height="7" fill="#e8e6df"/>'
 
+// The mocked clock of the band last mounted.
+let clock: ReturnType<typeof mock.clock>
+
 // A session whose context stands at `percent` (none before a reading), with both usage
 // windows read, and the band mounted on `surface`. `seated` is what monster-compact
 // has published; undefined is that plugin publishing nothing.
 async function band<S extends 'terminal' | 'desktop'>($: Engine, on: On, surface: S, seated?: Compaction, percent?: number) {
-  mock.clock(on, { now: NOW })
+  clock = mock.clock(on, { now: NOW })
   mock.env(on, seated ? { COMPACTION: JSON.stringify(seated) } : {})
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('session.usage', () => ({
@@ -120,5 +123,32 @@ describe('register', () => {
     const resumed = pick('working', boundary + span + 0.1, SEED, cues)
     const undisturbed = pick('working', boundary + 0.1, SEED)
     expect([resumed.name, resumed.local]).toEqual([undisturbed.name, undisturbed.local])
+  })
+
+  test('frames: a working session animates, a quiet one only at first and then holds a still', () => {
+    const [ANIMATE, STILL] = [120_000, 16_000]
+    expect(frameDue('working', 3_600_000, 150, ANIMATE, STILL)).toBe(true)
+    expect(frameDue('done', 2_000, 150, ANIMATE, STILL)).toBe(true)
+    expect(frameDue('idle', 119_000, 150, ANIMATE, STILL)).toBe(true)
+    expect(frameDue('idle', 3_600_000, 150, ANIMATE, STILL)).toBe(false)
+    expect(frameDue('relax', 3_600_000, 15_900, ANIMATE, STILL)).toBe(false)
+    expect(frameDue('idle', 3_600_000, 16_000, ANIMATE, STILL)).toBe(true)
+  })
+
+  test('desktop: an idle session stops redrawing the mascot once the quiet window has passed', { plugins: [publisher] }, async ($, on) => {
+    const ui = await band($, on, 'desktop', undefined, 40)
+    const mascot = async () => (await ui.findAll({ type: 'Svg' })).map(s => s.props as { source: string; alt: string }).find(s => s.alt.startsWith('Claude is'))?.source
+    // Inside the window the picture moves with the clock.
+    await clock.advance(1_500)
+    const early = await mascot()
+    await clock.advance(1_500)
+    expect(await mascot()).not.toBe(early)
+    // Past it, a few seconds change nothing; a whole slot brings one new still.
+    await clock.advance(150_000)
+    const still = await mascot()
+    await clock.advance(3_000)
+    expect(await mascot()).toBe(still)
+    await clock.advance(16_000)
+    expect(await mascot()).not.toBe(still)
   })
 })

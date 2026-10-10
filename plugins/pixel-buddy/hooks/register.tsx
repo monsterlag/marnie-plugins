@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentRun, Compaction, Ctx, Limit, Mood } from '../types'
-import { compactionFired, doneSeconds, pick } from './rotation'
+import { SLOT_SECONDS, compactionFired, doneSeconds, frameDue, pick } from './rotation'
 import { SCENE_BODY_HEIGHT, SCENE_BODY_WIDTH, SCENE_HEIGHT, SCENE_WIDTH, sceneSvg } from './scene'
 
 const mood = atom({ plugin: 'pixel-buddy', key: 'mood' } as const, 'idle' as Mood)
@@ -23,9 +23,12 @@ const compaction = { plugin: 'monster-compact', key: 'compaction' } as const
 
 // The "task complete" party plays once, then Claude relaxes for a while before idling.
 const RELAX_MS = 4 * 60_000
-// The mascot is drawn as still frames at this interval: ten a second, the most the
-// desktop surface redraws.
-const FRAME_MS = 100
+// The mascot is drawn as still frames at this interval while it animates.
+const FRAME_MS = 150
+// A quiet mood (done, relax, idle) animates for this long after it begins; from then
+// on the picture is a still, drawn again once a slot (see frameDue).
+const QUIET_ANIMATE_MS = 2 * 60_000
+const STILL_MS = SLOT_SECONDS * 1000
 // A sub-agent the engine gave no id (so its end is never reported) counts as running
 // for this long after its spawn; one with an id that never reports an end, for
 // SUBAGENT_STALE_S.
@@ -219,7 +222,8 @@ export const register: Register = (on, options) => {
     $.clock.every(1_000, () => watchCompaction($))
     $.clock.every(FRAME_MS, async () => {
       const t = await $.clock.now()
-      await update($, frame, () => t)
+      const due = frameDue(await read($, mood), t - (await read($, moodAt)), t - (await read($, frame)), QUIET_ANIMATE_MS, STILL_MS)
+      if (due) await update($, frame, () => t)
     })
     $.clock.every(1_000, async () => {
       const at = await read($, cacheAt)
