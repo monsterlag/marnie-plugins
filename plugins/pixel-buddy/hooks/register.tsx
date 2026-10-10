@@ -29,6 +29,8 @@ const FRAME_MS = 150
 // on the picture is a still, drawn again once a slot (see frameDue).
 const QUIET_ANIMATE_MS = 2 * 60_000
 const STILL_MS = SLOT_SECONDS * 1000
+// How many frame ticks wait on one that has not finished (about 5 s) before one runs anyway.
+const TICK_PATIENCE = 32
 // A sub-agent the engine gave no id (so its end is never reported) counts as running
 // for this long after its spawn; one with an id that never reports an end, for
 // SUBAGENT_STALE_S.
@@ -220,10 +222,24 @@ export const register: Register = (on, options) => {
     await update($, moodAt, () => t0)
     await watchCompaction($)
     $.clock.every(1_000, () => watchCompaction($))
+    // A tick that finds the last one still at work is skipped, so a slow host is never
+    // sent a backlog; and each tick asks the host only for what its answer turns on.
+    // A tick that never comes back holds the rest off for TICK_PATIENCE ticks at most.
+    let ticking = false
+    let skipped = 0
     $.clock.every(FRAME_MS, async () => {
-      const t = await $.clock.now()
-      const due = frameDue(await read($, mood), t - (await read($, moodAt)), t - (await read($, frame)), QUIET_ANIMATE_MS, STILL_MS)
-      if (due) await update($, frame, () => t)
+      if (ticking && skipped++ < TICK_PATIENCE) return
+      ticking = true
+      skipped = 0
+      try {
+        const t = await $.clock.now()
+        const m = await read($, mood)
+        const sinceMood = m === 'working' ? 0 : t - (await read($, moodAt))
+        const sinceFrame = m === 'working' || sinceMood < QUIET_ANIMATE_MS ? 0 : t - (await read($, frame))
+        if (frameDue(m, sinceMood, sinceFrame, QUIET_ANIMATE_MS, STILL_MS)) await update($, frame, () => t)
+      } finally {
+        ticking = false
+      }
     })
     $.clock.every(1_000, async () => {
       const at = await read($, cacheAt)

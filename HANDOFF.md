@@ -45,6 +45,8 @@ marketplace is named `monsterlag-plugins`.
 - Fix: `frameDue` in `hooks/rotation.ts`. A session animates while its mood is `working`, and for
   `QUIET_ANIMATE_MS` (2 min) after a quiet mood begins; then the picture is a still, redrawn once
   per `STILL_MS` (16 s). `FRAME_MS` is back to 150.
+- The frame tick skips itself while the last one is still running and reads only the state its
+  answer needs: an idle session past its window makes four host calls a tick.
 - Not verified in the app: that this cures the freezing and the renderer growth. Sessions open before the update keep the old timer until `/reload-plugins` or an app restart.
 
 ## Files
