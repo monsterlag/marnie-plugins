@@ -4,7 +4,15 @@ Fork of `hamymarnie/marnie-plugins`. Remotes: `origin` = monsterlag/marnie-plugi
 `upstream` = hamymarnie/marnie-plugins. The plugin lives in `plugins/pixel-buddy/`; the
 marketplace is named `monsterlag-plugins`.
 
-## Where things stand (end of 2026-10-09)
+## Where things stand (2026-10-14)
+
+- **The mascot animates itself** since the desktop app update of 2026-10-14 (2.31226.1 to
+  2.37337.1). See "Self-animating mascot" below: the band sends one picture per scene instead of
+  one per 150 ms frame. It replaces the 2026-10-09 frame-load fix (the 2-minute quiet window
+  and the 16 s stills are gone; idle sessions animate again).
+- **Not yet seen in the app by eye**: the screen was locked during the work. Checked in a
+  headless copy of the app's drawing pipeline, in the test kit under the app's engine, and in a
+  real engine run. First thing to do: look at the band, and watch the renderer for an evening.
 
 - **Released on `main`** and installed on the owner's Mac from GitHub
   (`pixel-buddy@monsterlag-plugins`). It is not installed on any other host.
@@ -32,13 +40,90 @@ marketplace is named `monsterlag-plugins`.
 - **Two layouts**, chosen by `bodyColumns` against `WIDE_MIN_COLUMNS` (84): wide as above with the
   stats spread across the remaining width; narrow with the picture inline on its own row
   (192x72, its own rounded corners) and the stats wrapping underneath.
-- **Scenes:** 22 native scenes on a 48x18 grid, 150 ms tick while animating (see "Frame load"). Moods: working (7, including
+- **Scenes:** 22 native scenes on a 48x18 grid, each loop drawn as one self-animating picture
+  (see "Self-animating mascot"). Moods: working (7, including
   `fallback`), done (1, plays once), relax (6), idle (6, including `waiting`). Order is shuffled
   per mood entry; a scene plays whole loops for about 16 s. `compaction` cuts in for two loops
   when the published `count` rises; `subagents` is favoured while a sub-agent runs
   (`agent.spawn` until a `turn.complete` carrying its `agentId`, or a 45 s decay).
 
+## Self-animating mascot (2026-10-14)
+
+### What changed in the desktop app (2.31226.1 to 2.37337.1, installed 2026-10-14 15:30)
+
+Read from the two app bundles (the old one from the 2026-10-12 Time Machine snapshot), chunk
+`c2719cf1b-*.js` in `Resources/ion-dist/assets/v1/`, which draws plugin trees:
+
+- **A band redraw no longer rebuilds the band.** The old app replaced the whole tree's DOM on
+  every redraw (`replaceWith`); the new one morphs it, and an `iframe` whose node is equal to the
+  new one (same `srcdoc`, same attributes, same path of tags) is kept. An interactive `Svg` is an
+  iframe, so one whose markup has not changed keeps playing across redraws. A plain `Svg` is an
+  `img` and is still rebuilt each time.
+- **SMIL is allowed** in an interactive `Svg` (`animate`, `set`, `use` are added to the scrub; it
+  was so in the old app too). The frame is `sandbox=""` with a CSP of `default-src 'none'`;
+  declarative animation needs neither script nor network.
+- **Text got typography**: `size` (caption, footnote, body, heading, title), `weight` (regular,
+  medium, semibold, bold), `mono`, `tabular`. The engine has to let them through: 2.1.295, which
+  the desktop app still pins for its sessions (`required_version:2.1.295` in its log), refuses a
+  tree that sets one (`Text prop "tabular" is not allowed`, and the band goes blank); 2.1.299
+  accepts them. The band sets `tabular` on its values only when `$.session.version()` is at least
+  2.1.299 (`TABULAR_FROM`), so today it does nothing on the desktop and turns on by itself when
+  the app moves its engine.
+- The band's container classes are the same (only split across lines), so the measured corner
+  clip should still hold. Not yet confirmed by eye.
+
+### How the mascot works now
+
+- `hooks/animate.ts` samples a scene's loop on its 100 ms tick, splits each frame into its
+  top-level elements (the crab's translated group flattened into plain pixels), merges the
+  frames into one ordered sequence (each frame is a subsequence, so painting order holds), and
+  groups neighbours that are on in the same frames under one `<animate attributeName="display">`.
+  Elements on in every frame are drawn once. Same-color pixels merge into one `<path>` wherever
+  nothing drawn between them could cover them. The twinkling dots are their own 3 s SMIL
+  animations (`setDotMode('smil')` in the kit), so they no longer depend on a clock.
+- `animatedSceneSvg` in `hooks/scene.ts` builds it once per scene and cut and keeps it. The
+  engine and the app cap an `Svg` at 131,072 characters: 20 scenes fit at 100 ms (17-117k);
+  `done` and `drive` only at 200 ms (84k and 116k), so those two step at 200 ms, coarser than
+  the old 150 ms. A scene that fits at neither would fall back to a still (none does).
+- `register.tsx` writes `frame` only when the scene on show changes (`refreshScene`): it looks at
+  the scene's next loop boundary (5 s at most) and at once on a mood change, a compaction noticed,
+  and a sub-agent's start or end. The band picks its scene at `frame`, as before.
+- The `Svg` is `isInteractive`, and its markup depends only on the scene and the cut, so the app
+  keeps the frame while the stats redraw, and a new scene arrives as a new frame (from its first
+  frame: scenes change on loop boundaries anyway).
+
+### Numbers
+
+Over a full rotation of each mood, bleed cut (computed with the scenes' own code):
+
+| | Old: a still every 150 ms | New: one picture per scene |
+|---|---|---|
+| working | 6.7 redraws/s, 60 KB/s | 0.09 redraws/s, 4.3 KB/s |
+| idle (when it animated) | 6.7 redraws/s, 58 KB/s | 0.08 redraws/s, 2.8 KB/s |
+| relax | 6.7 redraws/s, 33 KB/s | 0.07 redraws/s, 3.4 KB/s |
+
+The cost moves to the app's own animation of one document per visible band, which is what SMIL
+is for; whether a hidden session's frame keeps animating (Chromium normally stops painting what
+is not shown) was not measured.
+
+### How it was checked
+
+- `tools/check-animation.mts` (run instructions in its header): every scene, both cuts, every
+  tick, the animated picture with its SMIL clock seeked against the still the scene draws for
+  that moment: 0 differing frames, except 2 px on the bleed cut's clipped left edge in `fishing`
+  and `hammock` (anti-aliasing at x = 8, which the band hides). Then a copy of the app's
+  pipeline (its DOMPurify config, frame and CSP, and its morph code, copied from the bundle):
+  every animation survives the scrub, the picture plays by itself, a redraw with new stats keeps
+  the same iframe and it keeps playing, a new scene gets a new frame.
+- `claude plugin test plugins/pixel-buddy` (12 tests), also run with the app's pinned engine
+  (`~/Library/Application Support/Claude/claude-code/2.1.295/*/claude.app/Contents/MacOS/claude`);
+  the tabular test checks its prop only where the running engine accepts it.
+- A real 2.1.295 session with the checkout as `--plugin-dir`: the module loads, every hook
+  settles in 4-22 ms, no errors in the debug log.
+
 ## Frame load: the 2026-10-09 regression, what was found, what was done
+
+Superseded on 2026-10-14 by the self-animating mascot; kept for the evidence and the method.
 
 Read this before changing anything that animates. It is long because most of it is evidence,
 and the cause is still an inference.
@@ -220,10 +305,10 @@ its points stand for any later test:
 
 ### If the load comes back
 
-In rising order of what they cost the look: shorten `QUIET_ANIMATE_MS`; lengthen `FRAME_MS`; let the
-dots twinkle on the scene's loop time again, so a scene's frames repeat and the app has a bounded
-set of pictures to hold (this was the case before `4296f4a`; whether the app reuses a picture it
-has seen is untested); make the pictures smaller or simpler; add the stuck-turn backstop.
+With the self-animating mascot the plugin sends almost nothing, so look at the app's side first
+(`sample` the renderer). Options, cheapest first: stop animating idle sessions after a while (draw
+a still `sceneSvg` with `isInteractive` off once a quiet mood is old); sample at 200 ms for every
+scene (`ANIMATION_STEPS` in `scene.ts`); add the stuck-turn backstop.
 
 ### After a `claude plugin update`
 
@@ -235,12 +320,15 @@ grown; only relaunching the app does.
 ## Files
 
 - `hooks/register.tsx`: hooks, layouts, stats, timers, event cues. Tunables at the top.
-- `hooks/scene.ts`: the wrapper only (two cuts, clip, fade, calibration card).
+- `hooks/scene.ts`: the wrapper (two cuts, clip, fade, calibration card), the still frame and the
+  self-animating picture (`animatedSceneSvg`).
+- `hooks/animate.ts`: folds a scene's frames into one SMIL picture.
 - `hooks/rotation.ts`: seeded shuffle, slot timing, event cut-ins.
 - `hooks/native-kit.ts`: canvas rules (read its header first) and drawing helpers.
 - `hooks/native-{idle,working,relax,done,events}.ts`: the scenes; `hooks/native.ts`: the registry.
 - `tools/preview.ts`: `npx tsx plugins/pixel-buddy/tools/preview.ts <group|scene|all> out.svg`,
   then `qlmanage -t -s 1800 -o <dir> out.svg` to get a frame sheet as a PNG. Not loaded by the plugin.
+- `tools/check-animation.mts`: the browser check of the animated pictures and the app pipeline.
 - `git-assets/`: README preview, the all-scenes sheet, and the concept art the scenes came from.
 
 ## Things that will bite
@@ -252,9 +340,12 @@ grown; only relaunching the app does.
   band's padding or text size, or before using it on another machine.
 - **Desktop app limits found the hard way:**
   - the band is one render instance and redraws whole; plugin redraws cap at ten a second;
-  - a self-animating `Svg` (`isInteractive`) is torn down and restarted on every band redraw,
-    and a `Client` element draws only text cells, so motion smoother than 10 fps is not possible;
-  - native `Text` has no font size or weight control (bold and dim only);
+  - before 2.37337: a self-animating `Svg` (`isInteractive`) was torn down and restarted on every
+    band redraw. Since: it is kept while its markup is unchanged (see "Self-animating mascot");
+  - a `Client` element draws only text cells;
+  - native `Text` size and weight exist in the app since 2.37337 but the engine the app pins
+    (2.1.295) refuses them; they need engine 2.1.299 or later;
+  - an `Svg` source is capped at 131,072 characters;
   - an absolute Box at negative offsets is clipped to the band's rectangle, not its rounded shape;
   - SVG gradients and clip paths render; an `Svg` with an empty `alt` is silently dropped.
 - **A hooks module has no DOM and no Node.** Scene files import only from `./native-kit`.
@@ -263,10 +354,12 @@ grown; only relaunching the app does.
 
 ## Open
 
-- Whether the frame-load fix holds over hours of use (see "Not proven, and how to check").
-- Whether an idle mascot that holds still after two minutes is what the owner wants (changed
-  as an emergency fix, without a mockup).
-- A working session still sends about seven pictures a second for as long as the turn runs.
+- The self-animating mascot has not been looked at in the app (screen locked during the work):
+  check the corners, the scene changes, and the renderer over an evening with several sessions.
+- `done` and `drive` step at 200 ms because their 100 ms builds pass the 131k cap; a tighter
+  encoding (moving parts as one group with an animated transform) would let them back to 100 ms.
+- The `SessionMode` row still redraws once a second while the cache is warm (two small plain
+  SVGs, rebuilt each time); a self-counting SVG could take that to once per response.
 - No backstop for a turn that never reports its end (owner declined one, 2026-10-09).
 - `0k left` when context is past the trigger could show the overrun instead.
 - `compaction` and `subagents` cut-ins are verified in the test kit, not yet seen in the app.

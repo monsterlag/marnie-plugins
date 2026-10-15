@@ -4,6 +4,7 @@
 
 import { BAND_BG, CORE_COLS, CORE_ROWS, PAD_COLS, PAD_ROWS, setDotClock } from './native-kit'
 import type { NativeScene } from './native-kit'
+import { animatedBody } from './animate'
 
 // Screen pixels per grid pixel.
 const SCALE = 4
@@ -63,6 +64,14 @@ const CARD = (() => {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" shape-rendering="crispEdges">${out}</svg>`
 })()
 
+const wrap = (variant: SceneVariant, body: string) => {
+  const [open, clip] =
+    variant === 'bleed'
+      ? [svgOpen(-PAD_COLS, -PAD_ROWS, CORE_COLS + PAD_COLS, CORE_ROWS + 2 * PAD_ROWS), BLEED_CLIP]
+      : [svgOpen(0, 0, CORE_COLS, CORE_ROWS), INLINE_CLIP]
+  return `${open}<defs><clipPath id="edge">${clip}</clipPath></defs><g clip-path="url(#edge)">${GROUND}${body}${FADE}</g></svg>`
+}
+
 // One still frame of `scene`, `t` seconds into its loop, in the given cut. `clock` is a
 // time in seconds that never restarts (the background dots twinkle on it); left out, the
 // loop time stands in, as in the preview tool.
@@ -70,9 +79,33 @@ export function sceneSvg(scene: NativeScene, t: number, variant: SceneVariant = 
   if (CALIBRATE && variant === 'bleed') return CARD
   setDotClock(clock)
   const local = Math.round((((t % scene.loop) + scene.loop) % scene.loop) * 1000) / 1000
-  const [open, clip] =
-    variant === 'bleed'
-      ? [svgOpen(-PAD_COLS, -PAD_ROWS, CORE_COLS + PAD_COLS, CORE_ROWS + 2 * PAD_ROWS), BLEED_CLIP]
-      : [svgOpen(0, 0, CORE_COLS, CORE_ROWS), INLINE_CLIP]
-  return `${open}<defs><clipPath id="edge">${clip}</clipPath></defs><g clip-path="url(#edge)">${GROUND}${scene.draw(local)}${FADE}</g></svg>`
+  return wrap(variant, scene.draw(local))
+}
+
+// The most an Svg's markup may hold (the engine's and the desktop's bound).
+export const SVG_SOURCE_MAX = 131072
+const ANIMATION_STEPS = [0.1, 0.2]
+
+// The whole loop of `scene` as one picture that animates itself, in the given cut: the
+// same string for the same scene and cut, so the app keeps playing it across redraws.
+// Built once per scene and cut and kept. Sampled on the scenes' 100 ms tick, or every
+// 200 ms where that does not fit SVG_SOURCE_MAX; null where neither does.
+const animated = new Map<NativeScene, Partial<Record<SceneVariant, string | null>>>()
+export function animatedSceneSvg(scene: NativeScene, variant: SceneVariant = 'bleed'): string | null {
+  if (CALIBRATE && variant === 'bleed') return CARD
+  const cuts = animated.get(scene) ?? {}
+  let svg = cuts[variant]
+  if (svg === undefined) {
+    svg = null
+    for (const step of ANIMATION_STEPS) {
+      const built = wrap(variant, animatedBody(scene, step))
+      if (built.length <= SVG_SOURCE_MAX) {
+        svg = built
+        break
+      }
+    }
+    cuts[variant] = svg
+    animated.set(scene, cuts)
+  }
+  return svg
 }

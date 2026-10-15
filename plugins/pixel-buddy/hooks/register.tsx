@@ -2,11 +2,14 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentRun, Compaction, Ctx, Limit, Mood } from '../types'
-import { SLOT_SECONDS, compactionFired, doneSeconds, frameDue, pick } from './rotation'
-import { SCENE_BODY_HEIGHT, SCENE_BODY_WIDTH, SCENE_HEIGHT, SCENE_WIDTH, sceneSvg } from './scene'
+import { compactionFired, doneSeconds, pick } from './rotation'
+import type { Shown } from './rotation'
+import { SCENE_BODY_HEIGHT, SCENE_BODY_WIDTH, SCENE_HEIGHT, SCENE_WIDTH, animatedSceneSvg, sceneSvg } from './scene'
 
 const mood = atom({ plugin: 'pixel-buddy', key: 'mood' } as const, 'idle' as Mood)
 const moodAt = atom({ plugin: 'pixel-buddy', key: 'moodAt' } as const, 0)
+// When the scene on show last changed: the band picks its scene at this time. The scene
+// animates itself, so this is written only when another scene is due (see refreshScene).
 const frame = atom({ plugin: 'pixel-buddy', key: 'frame' } as const, 0)
 const cacheAt = atom({ plugin: 'pixel-buddy', key: 'cacheAt' } as const, null as number | null)
 const now = atom({ plugin: 'pixel-buddy', key: 'now' } as const, 0)
@@ -23,14 +26,13 @@ const compaction = { plugin: 'monster-compact', key: 'compaction' } as const
 
 // The "task complete" party plays once, then Claude relaxes for a while before idling.
 const RELAX_MS = 4 * 60_000
-// The mascot is drawn as still frames at this interval while it animates.
-const FRAME_MS = 150
-// A quiet mood (done, relax, idle) animates for this long after it begins; from then
-// on the picture is a still, drawn again once a slot (see frameDue).
-const QUIET_ANIMATE_MS = 2 * 60_000
-const STILL_MS = SLOT_SECONDS * 1000
-// How many frame ticks wait on one that has not finished (about 5 s) before one runs anyway.
-const TICK_PATIENCE = 32
+// The scene is looked at again at its next loop boundary (when the next scene may be due),
+// and at least this often, so a missed change shows within this long.
+const SCENE_CHECK_MAX_MS = 5_000
+// From this engine release a Text may set `tabular` (figures of one width), which keeps
+// the stat columns from shifting as their numbers change; earlier engines refuse a tree
+// that sets it.
+const TABULAR_FROM: [number, number, number] = [2, 1, 299]
 // A sub-agent the engine gave no id (so its end is never reported) counts as running
 // for this long after its spawn; one with an id that never reports an end, for
 // SUBAGENT_STALE_S.
@@ -150,7 +152,8 @@ async function setMood($: EngineInterface, m: Mood) {
 }
 
 // Looks at what monster-compact publishes; another compaction since the last look is
-// noted with its time. The value there at the first look is only remembered.
+// noted with its time, and the scene looked at again. The value there at the first look is only
+// remembered.
 async function watchCompaction($: EngineInterface) {
   const k = published(await read($, compaction))
   const seen = await read($, compSeen)
@@ -158,6 +161,7 @@ async function watchCompaction($: EngineInterface) {
   if (current && seen && compactionFired(seen, current)) {
     const t = await $.clock.now()
     await update($, compactions, list => [...list, t])
+    await refreshScene($)
   }
   if (current?.count !== seen?.count || current?.lastAt !== seen?.lastAt || !current !== !seen) await update($, compSeen, () => current)
 }
@@ -172,6 +176,67 @@ function sceneFor(m: Mood, elapsed: number, seed: number): { mood: Mood; t: numb
   }
   if (m === 'relax' && elapsed >= relaxS) return { mood: 'idle', t: elapsed - relaxS }
   return { mood: m, t: elapsed }
+}
+
+// The scene on show at `t` (epoch ms) for the stored mood and cues, as the band picks it,
+// how far into its loop it is, and how long until the next moment another may be due (its
+// next loop boundary, or relax handing over to idle).
+async function sceneAt($: EngineInterface, t: number, m: Mood, since: number): Promise<{ mood: Mood; shown: Shown; nextMs: number }> {
+  const elapsed = Math.max(0, (t - since) / 1000)
+  const { mood: shownMood, t: sceneT } = sceneFor(m, elapsed, since)
+  // The cues, as seconds into the mood on show.
+  const moodAtMs = since + (elapsed - sceneT) * 1000
+  const into = (ms: number) => (ms - moodAtMs) / 1000
+  const shown = pick(shownMood, sceneT, since, {
+    compactions: (await read($, compactions)).map(into).map(at => (at < 0 && at > -COMPACTION_CARRY_S ? 0 : at)),
+    agents: (await read($, agents)).map(a => ({ from: Math.max(0, into(a.from)), until: into(a.until ?? a.from + SUBAGENT_STALE_S * 1000) })),
+  })
+  const toBoundary = (shown.scene.loop - shown.local) * 1000
+  const toIdle = shownMood === 'relax' ? (RELAX_MS / 1000 - sceneT) * 1000 : Infinity
+  return { mood: shownMood, shown, nextMs: Math.min(toBoundary, toIdle) }
+}
+
+// This session's scene bookkeeping (the module runs once per session; a reload starts it
+// over, and session.start runs again): the scene last written, the pending look, the
+// queue that keeps looks one at a time, and whether the engine takes `tabular`.
+let shownKey: string | undefined
+let wake: { cancel: () => void } | undefined
+let looking: Promise<void> = Promise.resolve()
+let tabular = false
+
+// Looks at which scene is due and writes `frame` only when it is another one: the band
+// redraws once a scene, never a frame. Then waits for the scene's next loop boundary (or
+// SCENE_CHECK_MAX_MS at most) to look again. Mood and cue changes call it at once. Runs
+// one look at a time; a failed look tries again after SCENE_CHECK_MAX_MS.
+function refreshScene($: EngineInterface): Promise<void> {
+  looking = looking.then(() => lookAtScene($)).catch(() => undefined)
+  return looking
+}
+
+async function lookAtScene($: EngineInterface) {
+  let nextMs = SCENE_CHECK_MAX_MS
+  try {
+    const t = await $.clock.now()
+    const at = await sceneAt($, t, await read($, mood), await read($, moodAt))
+    const key = `${at.mood}/${at.shown.name}`
+    if (key !== shownKey) {
+      shownKey = key
+      await update($, frame, () => t)
+    }
+    nextMs = Math.min(SCENE_CHECK_MAX_MS, Math.max(50, at.nextMs + 20))
+  } finally {
+    wake?.cancel()
+    wake = $.clock.after(nextMs, () => void refreshScene($))
+  }
+}
+
+// Whether the engine's version is at least `min`.
+const atLeast = (version: string, min: [number, number, number]) => {
+  const parts = /^(\d+)\.(\d+)\.(\d+)/.exec(version)
+  if (!parts) return false
+  const v: [number, number, number] = [Number(parts[1]), Number(parts[2]), Number(parts[3])]
+  for (let i = 0; i < 3; i++) if (v[i] !== min[i]) return (v[i] as number) > (min[i] as number)
+  return true
 }
 
 // 999,500 and up rounds to a million, so it is written in M (never "1000k"); a whole
@@ -220,27 +285,15 @@ export const register: Register = (on, options) => {
       await update($, minute, () => t)
     })
     await update($, moodAt, () => t0)
+    try {
+      tabular = atLeast((await $.session.version()).version, TABULAR_FROM)
+    } catch {
+      tabular = false
+    }
+    shownKey = undefined
     await watchCompaction($)
     $.clock.every(1_000, () => watchCompaction($))
-    // A tick that finds the last one still at work is skipped, so a slow host is never
-    // sent a backlog; and each tick asks the host only for what its answer turns on.
-    // A tick that never comes back holds the rest off for TICK_PATIENCE ticks at most.
-    let ticking = false
-    let skipped = 0
-    $.clock.every(FRAME_MS, async () => {
-      if (ticking && skipped++ < TICK_PATIENCE) return
-      ticking = true
-      skipped = 0
-      try {
-        const t = await $.clock.now()
-        const m = await read($, mood)
-        const sinceMood = m === 'working' ? 0 : t - (await read($, moodAt))
-        const sinceFrame = m === 'working' || sinceMood < QUIET_ANIMATE_MS ? 0 : t - (await read($, frame))
-        if (frameDue(m, sinceMood, sinceFrame, QUIET_ANIMATE_MS, STILL_MS)) await update($, frame, () => t)
-      } finally {
-        ticking = false
-      }
-    })
+    await refreshScene($)
     $.clock.every(1_000, async () => {
       const at = await read($, cacheAt)
       if (at === null) return
@@ -265,6 +318,7 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async ($, e, next) => {
     await setMood($, 'working')
+    await refreshScene($)
     return next(e)
   })
 
@@ -278,6 +332,7 @@ export const register: Register = (on, options) => {
         const id = 'agentId' in started ? started.agentId : undefined
         const run: AgentRun = id ? { id, from: t, until: null } : { from: t, until: t + SUBAGENT_LINGER_S * 1000 }
         await update($, agents, list => [...list, run])
+        await refreshScene($)
       }
     } catch {
       // The band's bookkeeping must never cost a spawn.
@@ -292,9 +347,11 @@ export const register: Register = (on, options) => {
       // A sub-agent's own turn ended: it is no longer running.
       const t = await $.clock.now()
       await update($, agents, list => list.map(a => (a.id === e.agentId && a.until === null ? { ...a, until: t } : a)))
+      await refreshScene($)
       return next(e)
     }
     await setMood($, e.isAborted || e.reason === 'error' ? 'idle' : 'done')
+    await refreshScene($)
     return next(e)
   })
 
@@ -368,20 +425,15 @@ export const register: Register = (on, options) => {
     const m: Mood = e.props.isWorking ? 'working' : stored === 'working' ? 'idle' : stored
     const tFrame = await read($, frame)
     const since = m === stored ? await read($, moodAt) : 0
-    const elapsed = Math.max(0, (tFrame - since) / 1000)
-    const { mood: shownMood, t: sceneT } = sceneFor(m, elapsed, since)
-    // The cues, as seconds into the mood on show.
-    const moodAtMs = since + (elapsed - sceneT) * 1000
-    const into = (ms: number) => (ms - moodAtMs) / 1000
-    const shown = pick(shownMood, sceneT, since, {
-      compactions: (await read($, compactions)).map(into).map(at => (at < 0 && at > -COMPACTION_CARRY_S ? 0 : at)),
-      agents: (await read($, agents)).map(a => ({ from: Math.max(0, into(a.from)), until: into(a.until ?? a.from + SUBAGENT_STALE_S * 1000) })),
-    })
+    const { mood: shownMood, shown } = await sceneAt($, tFrame, m, since)
 
+    // Figures of one width, where the engine takes them (typed loosely: older engines'
+    // types do not know the prop).
+    const figures = (tabular ? { tabular: true } : {}) as object
     const column = (s: Stat) => (
       <Box key={s.key} flexDirection="column" flexShrink={0}>
         <Box flexDirection="row" gap={UNIT_GAP}>
-          <Text bold wrap="truncate-end">{s.value}</Text>
+          <Text bold wrap="truncate-end" {...figures}>{s.value}</Text>
           {s.unit ? <Text dimColor wrap="truncate-end">{s.unit}</Text> : null}
         </Box>
         <Text dimColor wrap="truncate-end">{s.caption}</Text>
@@ -405,14 +457,21 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
-    const mascotSvg = (variant: 'bleed' | 'inline') => (
-      <Svg
-        source={sceneSvg(shown.scene, shown.local, variant, tFrame / 1000)}
-        alt={`Claude is ${shownMood === 'done' ? 'celebrating' : shownMood === 'relax' ? 'relaxing' : shownMood}`}
-        width={variant === 'bleed' ? SCENE_WIDTH : SCENE_BODY_WIDTH}
-        height={variant === 'bleed' ? SCENE_HEIGHT : SCENE_BODY_HEIGHT}
-      />
-    )
+    // The scene's whole loop as one picture that plays itself: the same markup for as long
+    // as the scene is on show, so the app keeps playing it while the stats redraw. A scene
+    // too big for that (none today) shows as a still.
+    const mascotSvg = (variant: 'bleed' | 'inline') => {
+      const animated = animatedSceneSvg(shown.scene, variant)
+      return (
+        <Svg
+          source={animated ?? sceneSvg(shown.scene, shown.local, variant, tFrame / 1000)}
+          alt={`Claude is ${shownMood === 'done' ? 'celebrating' : shownMood === 'relax' ? 'relaxing' : shownMood}`}
+          width={variant === 'bleed' ? SCENE_WIDTH : SCENE_BODY_WIDTH}
+          height={variant === 'bleed' ? SCENE_HEIGHT : SCENE_BODY_HEIGHT}
+          isInteractive={animated !== null}
+        />
+      )
+    }
     const statPairs = [pair('limits', stats.slice(0, 2)), pair('session', stats.slice(2))]
 
     // Wide: one row that never wraps, so the band keeps the height the bled picture's

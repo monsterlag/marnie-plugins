@@ -3,8 +3,10 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import type { Compaction } from '../types'
-import { eventScenes } from '../hooks/native'
-import { compactionFired, frameDue, pick } from '../hooks/rotation'
+import { eventScenes, nativeScenes } from '../hooks/native'
+import { compact, flatten, topLevel } from '../hooks/animate'
+import { compactionFired, pick } from '../hooks/rotation'
+import { SVG_SOURCE_MAX, animatedSceneSvg } from '../hooks/scene'
 import { publisher } from './fixtures/publisher'
 
 const NOW = Date.parse('2026-10-07T12:00:00.000Z')
@@ -27,10 +29,11 @@ let clock: ReturnType<typeof mock.clock>
 // A session whose context stands at `percent` (none before a reading), with both usage
 // windows read, and the band mounted on `surface`. `seated` is what monster-compact
 // has published; undefined is that plugin publishing nothing.
-async function band<S extends 'terminal' | 'desktop'>($: Engine, on: On, surface: S, seated?: Compaction, percent?: number) {
+async function band<S extends 'terminal' | 'desktop'>($: Engine, on: On, surface: S, seated?: Compaction, percent?: number, version = '2.1.295') {
   clock = mock.clock(on, { now: NOW })
   mock.env(on, seated ? { COMPACTION: JSON.stringify(seated) } : {})
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.version', () => ({ value: { version, base: version } }))
   on('session.usage', () => ({
     value: {
       startedAt: NOW,
@@ -125,30 +128,85 @@ describe('register', () => {
     expect([resumed.name, resumed.local]).toEqual([undisturbed.name, undisturbed.local])
   })
 
-  test('frames: a working session animates, a quiet one only at first and then holds a still', () => {
-    const [ANIMATE, STILL] = [120_000, 16_000]
-    expect(frameDue('working', 3_600_000, 150, ANIMATE, STILL)).toBe(true)
-    expect(frameDue('done', 2_000, 150, ANIMATE, STILL)).toBe(true)
-    expect(frameDue('idle', 119_000, 150, ANIMATE, STILL)).toBe(true)
-    expect(frameDue('idle', 3_600_000, 150, ANIMATE, STILL)).toBe(false)
-    expect(frameDue('relax', 3_600_000, 15_900, ANIMATE, STILL)).toBe(false)
-    expect(frameDue('idle', 3_600_000, 16_000, ANIMATE, STILL)).toBe(true)
+  test('desktop: the mascot is one picture that plays itself, sent again only when the scene changes', { plugins: [publisher] }, async ($, on) => {
+    const ui = await band($, on, 'desktop', undefined, 40)
+    const mascot = async () =>
+      (await ui.findAll({ type: 'Svg' })).map(s => s.props as { source: string; alt: string; isInteractive?: boolean }).find(s => s.alt.startsWith('Claude is'))
+    const first = await mascot()
+    expect(first?.isInteractive).toBe(true)
+    expect(first?.source).toContain('<animate ')
+    expect(first?.source.length).toBeLessThanOrEqual(SVG_SOURCE_MAX)
+    // Within the scene nothing changes: the same markup a few seconds on.
+    await clock.advance(3_000)
+    expect((await mascot())?.source).toBe(first?.source)
+    // Over two minutes of idling the picture changes once a scene, never once a tick:
+    // the scenes play at least 6 s, so at most one change in six seconds.
+    const sources: string[] = []
+    for (let s = 0; s < 120; s++) {
+      await clock.advance(1_000)
+      const now = (await mascot())?.source ?? ''
+      if (now !== sources.at(-1)) sources.push(now)
+    }
+    expect(sources.length).toBeGreaterThanOrEqual(3)
+    expect(sources.length).toBeLessThanOrEqual(120 / 6 + 2)
+    expect((await mascot())?.source).not.toBe(first?.source)
   })
 
-  test('desktop: an idle session stops redrawing the mascot once the quiet window has passed', { plugins: [publisher] }, async ($, on) => {
-    const ui = await band($, on, 'desktop', undefined, 40)
-    const mascot = async () => (await ui.findAll({ type: 'Svg' })).map(s => s.props as { source: string; alt: string }).find(s => s.alt.startsWith('Claude is'))?.source
-    // Inside the window the picture moves with the clock.
-    await clock.advance(1_500)
-    const early = await mascot()
-    await clock.advance(1_500)
-    expect(await mascot()).not.toBe(early)
-    // Past it, a few seconds change nothing; a whole slot brings one new still.
-    await clock.advance(150_000)
-    const still = await mascot()
-    await clock.advance(3_000)
-    expect(await mascot()).toBe(still)
-    await clock.advance(16_000)
-    expect(await mascot()).not.toBe(still)
+  test('desktop: a new turn shows a working scene at once', { plugins: [publisher] }, async ($, on) => {
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    await band($, on, 'desktop', undefined, 40)
+    await $.turn.start({ text: 'hi', turnId: 't1' })
+    const ui = await $.ui.mount({ plugin: 'pixel-buddy', surface: 'desktop', component: 'AbovePrompt', props: { ...PROPS, isWorking: true } })
+    const alt = (await ui.findAll({ type: 'Svg' })).map(s => s.props as { alt: string }).find(s => s.alt.startsWith('Claude is'))?.alt
+    expect(alt).toBe('Claude is working')
+  })
+
+  test('desktop: figures are tabular only on an engine that takes the prop', { plugins: [publisher] }, async ($, on) => {
+    // The kit validates with the engine running the test: one older than TABULAR_FROM
+    // refuses the prop (which is why the band asks), so there the check cannot run.
+    const ui = await band($, on, 'desktop', undefined, 40, '2.1.299').catch((error: Error) => {
+      if (/Text prop "tabular" is not allowed/.test(error.message)) return undefined
+      throw error
+    })
+    if (!ui) return
+    const value = (await ui.findAll({ type: 'Text' })).find(t => t.text === '41%')
+    expect(value?.props).toMatchObject({ bold: true, tabular: true })
+  })
+
+  test('desktop: no tabular prop on an older engine', { plugins: [publisher] }, async ($, on) => {
+    const ui = await band($, on, 'desktop', undefined, 40, '2.1.295')
+    const value = (await ui.findAll({ type: 'Text' })).find(t => t.text === '41%')
+    expect(value?.props).not.toHaveProperty('tabular')
+  })
+
+  test('animation: every scene fits as one picture of allowed elements', () => {
+    for (const variant of ['bleed', 'inline'] as const) {
+      for (const { name, scene } of [...Object.values(eventScenes), ...Object.values(nativeScenes).flat()]) {
+        const svg = animatedSceneSvg(scene, variant)
+        expect([name, variant, svg !== null]).toEqual([name, variant, true])
+        expect((svg as string).length).toBeLessThanOrEqual(SVG_SOURCE_MAX)
+        // The desktop's scrub drops these, and every event-handler attribute.
+        expect(/<(script|foreignObject|image|a|iframe)[\s>]/i.test(svg as string)).toBe(false)
+        expect(/\son[a-z]+=/i.test(svg as string)).toBe(false)
+        // Built once: the same string every time.
+        expect(animatedSceneSvg(scene, variant)).toBe(svg)
+      }
+    }
+  })
+
+  test('animation: elements split, the crab flattens, same-color pixels merge only where order allows', () => {
+    expect(topLevel('<rect x="0" y="0" width="1" height="1" fill="#fff"/><g opacity="0.5"><rect x="1" y="1" width="1" height="1" fill="#000"/></g>')).toEqual([
+      '<rect x="0" y="0" width="1" height="1" fill="#fff"/>',
+      '<g opacity="0.5"><rect x="1" y="1" width="1" height="1" fill="#000"/></g>',
+    ])
+    expect(flatten('<g transform="translate(2 3)"><rect x="1" y="0" width="2" height="1" fill="#d97757"/></g>')).toEqual([
+      '<rect x="3" y="3" width="2" height="1" fill="#d97757"/>',
+    ])
+    const red = (x: number) => `<rect x="${x}" y="0" width="1" height="1" fill="#f00"/>`
+    const blue = (x: number) => `<rect x="${x}" y="0" width="1" height="1" fill="#00f"/>`
+    // Apart: the two reds join one path past the blue.
+    expect(compact([red(0), blue(1), red(2)])).toBe('<path d="M0 0h1v1h-1zM2 0h1v1h-1z" fill="#f00"/><path d="M1 0h1v1h-1z" fill="#00f"/>')
+    // Over the blue: the second red must stay on top, so it gets its own path.
+    expect(compact([red(0), blue(1), red(1)])).toBe('<path d="M0 0h1v1h-1z" fill="#f00"/><path d="M1 0h1v1h-1z" fill="#00f"/><path d="M1 0h1v1h-1z" fill="#f00"/>')
   })
 })

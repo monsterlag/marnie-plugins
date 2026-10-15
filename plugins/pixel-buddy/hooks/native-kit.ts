@@ -132,9 +132,25 @@ export const setDotClock = (seconds: number) => {
   dotClock = seconds
 }
 
+// How the twinkling dots are drawn: 'clock' as a still at the dot clock (the preview
+// tool), 'smil' each with its own animation, the same markup on every frame, for the
+// self-animating picture (animate.ts). Returns the mode it replaces.
+export type DotMode = 'clock' | 'smil'
+let dotMode: DotMode = 'clock'
+export const setDotMode = (mode: DotMode): DotMode => {
+  const was = dotMode
+  dotMode = mode
+  return was
+}
+
+// A twinkling dot's 3 s cycle: bright for 0.9 s, half for 0.3 s, dim, half again from 2.7 s.
+const TWINKLE = { values: '#555;#3c3c3c;#2c2c2c;#3c3c3c', keyTimes: '0;0.3;0.4;0.9' }
+const twinkle = (x: number, y: number, offset: number) =>
+  `<rect x="${x}" y="${y}" width="1" height="1" fill="#2c2c2c"><animate attributeName="fill" values="${TWINKLE.values}" keyTimes="${TWINKLE.keyTimes}" dur="3s" begin="-${Math.round(offset * 1000) / 1000}s" calcMode="discrete" repeatCount="indefinite"/></rect>`
+
 // The dotted field of the dark scenes over the whole padded picture; a few dots twinkle
-// on a 3 s cycle of the dot clock, each from its own moment. `_t` (the scene's loop
-// time) is accepted and not used.
+// on a 3 s cycle, each from its own moment. `_t` (the scene's loop time) is accepted and
+// not used.
 export function dotsFull(_t?: number): string {
   let out = ''
   for (let x = FULL_X; x < FULL_X + FULL_W; x += 2) {
@@ -142,7 +158,12 @@ export function dotsFull(_t?: number): string {
       const r = rnd(x * 31 + y + 400)
       if (r >= DOT_DENSITY) continue
       if (r < DOT_DENSITY * 0.2) {
-        const at = into(dotClock, 3, rnd(x * y + 7) * 3)
+        const offset = rnd(x * y + 7) * 3
+        if (dotMode === 'smil') {
+          out += twinkle(x, y, offset)
+          continue
+        }
+        const at = into(dotClock, 3, offset)
         out += rect(x, y, 1, 1, at < 0.9 ? '#555' : at < 1.2 || at > 2.7 ? '#3c3c3c' : '#2c2c2c')
       } else out += rect(x, y, 1, 1, r < DOT_DENSITY * 0.45 ? '#3c3c3c' : '#2c2c2c')
     }
