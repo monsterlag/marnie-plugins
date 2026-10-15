@@ -88,6 +88,8 @@ Read from the two app bundles (the old one from the 2026-10-12 Time Machine snap
 - `register.tsx` writes `frame` only when the scene on show changes (`refreshScene`): it looks at
   the scene's next loop boundary (5 s at most) and at once on a mood change, a compaction noticed,
   and a sub-agent's start or end. The band picks its scene at `frame`, as before.
+- A sub-agent's own `turn.start` (it carries `agentId`) is passed on without touching the mood,
+  as `turn.complete` already was; before, it reset the main mood's entry and jumped its scene.
 - The `Svg` is `isInteractive`, and its markup depends only on the scene and the cut, so the app
   keeps the frame while the stats redraw, and a new scene arrives as a new frame (from its first
   frame: scenes change on loop boundaries anyway).
@@ -115,7 +117,7 @@ is not shown) was not measured.
   pipeline (its DOMPurify config, frame and CSP, and its morph code, copied from the bundle):
   every animation survives the scrub, the picture plays by itself, a redraw with new stats keeps
   the same iframe and it keeps playing, a new scene gets a new frame.
-- `claude plugin test plugins/pixel-buddy` (12 tests), also run with the app's pinned engine
+- `claude plugin test plugins/pixel-buddy` (13 tests), also run with the app's pinned engine
   (`~/Library/Application Support/Claude/claude-code/2.1.295/*/claude.app/Contents/MacOS/claude`);
   the tabular test checks its prop only where the running engine accepts it.
 - A real 2.1.295 session with the checkout as `--plugin-dir`: the module loads, every hook
