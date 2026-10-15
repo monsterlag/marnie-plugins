@@ -89,8 +89,14 @@ const ANIMATION_STEPS = [0.1, 0.2]
 // The whole loop of `scene` as one picture that animates itself, in the given cut: the
 // same string for the same scene and cut, so the app keeps playing it across redraws.
 // Built once per scene and cut and kept. Sampled on the scenes' 100 ms tick, or every
-// 200 ms where that does not fit SVG_SOURCE_MAX; null where neither does.
+// 200 ms where that does not fit SVG_SOURCE_MAX; null where neither does. animationStep
+// says which step a scene and cut got.
 const animated = new Map<NativeScene, Partial<Record<SceneVariant, string | null>>>()
+const steps = new Map<NativeScene, Partial<Record<SceneVariant, number>>>()
+export const animationStep = (scene: NativeScene, variant: SceneVariant = 'bleed'): number | undefined => {
+  animatedSceneSvg(scene, variant)
+  return steps.get(scene)?.[variant]
+}
 export function animatedSceneSvg(scene: NativeScene, variant: SceneVariant = 'bleed'): string | null {
   if (CALIBRATE && variant === 'bleed') return CARD
   const cuts = animated.get(scene) ?? {}
@@ -101,6 +107,7 @@ export function animatedSceneSvg(scene: NativeScene, variant: SceneVariant = 'bl
       const built = wrap(variant, animatedBody(scene, step))
       if (built.length <= SVG_SOURCE_MAX) {
         svg = built
+        steps.set(scene, { ...steps.get(scene), [variant]: step })
         break
       }
     }

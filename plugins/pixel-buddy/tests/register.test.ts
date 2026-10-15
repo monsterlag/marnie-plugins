@@ -161,6 +161,17 @@ describe('register', () => {
     expect(alt).toBe('Claude is working')
   })
 
+  test('desktop: a sub-agent starting its own turn leaves the main mood alone', { plugins: [publisher] }, async ($, on) => {
+    on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+    const ui = await band($, on, 'desktop', undefined, 40)
+    const mascot = async () => (await ui.findAll({ type: 'Svg' })).map(s => s.props as { source: string; alt: string }).find(s => s.alt.startsWith('Claude is'))
+    const before = await mascot()
+    await $.turn.start({ text: 'research', turnId: 't2', agentId: 'agent-1' })
+    // The idle entry, its seed and so its scene are untouched.
+    expect((await mascot())?.source).toBe(before?.source)
+    expect((await mascot())?.alt).toBe('Claude is idle')
+  })
+
   test('desktop: figures are tabular only on an engine that takes the prop', { plugins: [publisher] }, async ($, on) => {
     // The kit validates with the engine running the test: one older than TABULAR_FROM
     // refuses the prop (which is why the band asks), so there the check cannot run.
@@ -208,5 +219,8 @@ describe('register', () => {
     expect(compact([red(0), blue(1), red(2)])).toBe('<path d="M0 0h1v1h-1zM2 0h1v1h-1z" fill="#f00"/><path d="M1 0h1v1h-1z" fill="#00f"/>')
     // Over the blue: the second red must stay on top, so it gets its own path.
     expect(compact([red(0), blue(1), red(1)])).toBe('<path d="M0 0h1v1h-1z" fill="#f00"/><path d="M1 0h1v1h-1z" fill="#00f"/><path d="M1 0h1v1h-1z" fill="#f00"/>')
+    // Translucent pixels on top of each other stack, so they stay separate.
+    const glass = '<rect x="0" y="0" width="1" height="1" fill="#fff" fill-opacity="0.5"/>'
+    expect(compact([glass, glass])).toBe('<path d="M0 0h1v1h-1z" fill="#fff" fill-opacity="0.5"/><path d="M0 0h1v1h-1z" fill="#fff" fill-opacity="0.5"/>')
   })
 })

@@ -317,6 +317,8 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.start', async ($, e, next) => {
+    // A sub-agent's own turn: the main loop's mood is not this one's to set.
+    if (e.agentId) return next(e)
     await setMood($, 'working')
     await refreshScene($)
     return next(e)

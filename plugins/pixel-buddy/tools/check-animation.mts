@@ -16,8 +16,7 @@
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 import { eventScenes, nativeScenes } from '../hooks/native'
-import { animatedBody } from '../hooks/animate'
-import { SCENE_BODY_HEIGHT, SCENE_BODY_WIDTH, SCENE_HEIGHT, SCENE_WIDTH, SVG_SOURCE_MAX, animatedSceneSvg, sceneSvg } from '../hooks/scene'
+import { SCENE_BODY_HEIGHT, SCENE_BODY_WIDTH, SCENE_HEIGHT, SCENE_WIDTH, animatedSceneSvg, animationStep, sceneSvg } from '../hooks/scene'
 
 // The browser kit comes from where the tool is run, not from the repo.
 const local = createRequire(process.cwd() + '/')
@@ -47,8 +46,7 @@ for (const s of scenes) {
       failures++
       continue
     }
-    // The 200 ms build is used where the 100 ms one does not fit (see animatedSceneSvg).
-    const step = animatedBody(s.scene, 0.1).length + 2000 > SVG_SOURCE_MAX ? 0.2 : 0.1
+    const step = animationStep(s.scene, variant) as number
     const [w, h] = variant === 'bleed' ? [SCENE_WIDTH, SCENE_HEIGHT] : [SCENE_BODY_WIDTH, SCENE_BODY_HEIGHT]
     await page.setContent(`<body style="margin:0;background:#000"><div id="a" style="width:${w}px;height:${h}px">${anim}</div><div id="b" style="width:${w}px;height:${h}px"></div></body>`)
     let bad = 0

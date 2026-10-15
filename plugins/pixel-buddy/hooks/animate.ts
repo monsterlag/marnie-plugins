@@ -99,7 +99,8 @@ export function compact(elements: string[]): string {
         break
       }
       if (it.key === key) {
-        target = it
+        // A translucent pixel over one already in the path must stack, so it gets its own.
+        if (p[6] === undefined || !it.boxes.some(b => overlaps(b, box))) target = it
         break
       }
       if (it.boxes.some(b => overlaps(b, box))) break
