@@ -42,6 +42,7 @@ declare module 'claude-code' {
       minute: number
       ctx: Ctx | null
       limits: Limit[]
+      limitsAt: number
       compSeen: { count: number; lastAt: number | null } | null
       compactions: number[]
       agents: AgentRun[]

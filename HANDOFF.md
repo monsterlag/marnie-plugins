@@ -4,8 +4,20 @@ Fork of `hamymarnie/marnie-plugins`. Remotes: `origin` = monsterlag/marnie-plugi
 `upstream` = hamymarnie/marnie-plugins. The plugin lives in `plugins/pixel-buddy/`; the
 marketplace is named `monsterlag-plugins`.
 
-## Where things stand (2026-10-14)
+## Where things stand (2026-10-15)
 
+- **2026-10-15, 5h/7d columns fixed (not yet released).** The engine learns rate limits only
+  from a reply's headers: `$.session.usage().rateLimits` is `[]` at `session.start` (measured on
+  2.1.299 and 2.1.300), and `session.start` wrote that over the session's list. The desktop app
+  re-runs `session.start` in every open session when any plugin is installed or updated
+  (`reload_plugins broadcast`), so every idle session showed `–`/`waiting` until its own next
+  reply; an idle session also kept a stale percent past its window's reset (`resets 0m`). Now
+  each reply's list goes to the plugin's store as `{ limits, at }` too (one JSON file per plugin
+  source under `~/.claude/plugins/store/`, e.g. `pixel-buddy_inline-*.json` for a `--plugin-dir`
+  run), and every session takes it at `session.start` and on its minute tick when it is newer
+  than its own; an empty list never replaces a known one. A window whose `resetsAt` has passed
+  draws `0%`, an empty bar and `reset`. Checked in the test kit and with two real `claude -p`
+  runs (the second's `session.start` held the first's list); not yet seen in the app.
 - **The mascot animates itself** since the desktop app update of 2026-10-14 (2.31226.1 to
   2.37337.1). See "Self-animating mascot" below: the band sends one picture per scene instead of
   one per 150 ms frame. It replaces the 2026-10-09 frame-load fix (the 2-minute quiet window
@@ -33,7 +45,9 @@ marketplace is named `monsterlag-plugins`.
   7d limit, context tokens (with a tick at the compaction trigger), and tokens left before
   compaction with the last saved amount. The last two come from a value another plugin
   publishes, `{ plugin: 'monster-compact', key: 'compaction' }` (contract mirrored in
-  `types/index.d.ts`); without a valid value there are three columns and no tick.
+  `types/index.d.ts`); without a valid value there are three columns and no tick. The limits
+  are the last measured in any session (kept in `$.store`); a window past its reset shows
+  `0%` and `reset`.
 - **Mascot portrait on the left:** a 216x104 SVG at 4x pixels in an absolutely positioned Box at
   negative cell offsets, so it bleeds into the band's padding; a clip path rounds its two left
   corners to the band's outline; a gradient fades its right side into the band.
@@ -335,6 +349,10 @@ grown; only relaunching the app does.
 
 ## Things that will bite
 
+- **The limits store is a file the engine reads on every call.** `~/.claude/plugins/store/<plugin id>.json`
+  (one per plugin install; the installed band and a `--plugin-dir` build use different files). A malformed
+  file makes every `$.store` call throw: the band catches it and keeps working, but the stored limits stay
+  unused until the file is deleted by hand.
 - **The corner clip is measured, not derived.** `EDGE_LEFT 8`, `EDGE_TOP 8.5`, `EDGE_BOTTOM 101.5`,
   `CORNER_RADIUS 10` in `hooks/scene.ts` were read off the calibration card in the owner's desktop
   app (set `CALIBRATE = true`, reload, screenshot, read the grid: lines every 8 px, thick white

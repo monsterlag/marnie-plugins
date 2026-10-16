@@ -26,10 +26,16 @@ const TICK = '<rect x="42.20" y="0" width="2" height="7" fill="#e8e6df"/>'
 // The mocked clock of the band last mounted.
 let clock: ReturnType<typeof mock.clock>
 
-// A session whose context stands at `percent` (none before a reading), with both usage
-// windows read, and the band mounted on `surface`. `seated` is what monster-compact
-// has published; undefined is that plugin publishing nothing.
-async function band<S extends 'terminal' | 'desktop'>($: Engine, on: On, surface: S, seated?: Compaction, percent?: number, version = '2.1.295') {
+const READ_LIMITS = [
+  { kind: 'five_hour', percentUsed: 41, resetsAt: '2026-10-07T15:12:00.000Z' },
+  { kind: 'seven_day', percentUsed: 19, resetsAt: '2026-10-13T12:00:00.000Z' },
+]
+
+// A session whose context stands at `percent` (none before a reading), with the usage
+// windows the engine reports at its start (both read, unless given), and the band
+// mounted on `surface`. `seated` is what monster-compact has published; undefined is
+// that plugin publishing nothing.
+async function band<S extends 'terminal' | 'desktop'>($: Engine, on: On, surface: S, seated?: Compaction, percent?: number, version = '2.1.295', rateLimits = READ_LIMITS) {
   clock = mock.clock(on, { now: NOW })
   mock.env(on, seated ? { COMPACTION: JSON.stringify(seated) } : {})
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -38,10 +44,7 @@ async function band<S extends 'terminal' | 'desktop'>($: Engine, on: On, surface
     value: {
       startedAt: NOW,
       context: { window: 200_000, ...(percent === undefined ? {} : { tokens: percent * 2000, percent }) },
-      rateLimits: [
-        { kind: 'five_hour', percentUsed: 41, resetsAt: '2026-10-07T15:12:00.000Z' },
-        { kind: 'seven_day', percentUsed: 19, resetsAt: '2026-10-13T12:00:00.000Z' },
-      ],
+      rateLimits,
     },
   }))
   await $.session.start({ surface, isInteractive: true, cwd: '/work' })
@@ -108,6 +111,20 @@ describe('register', () => {
     expect((await ui.findAll({ type: 'Text' })).map(t => [t.text, t.props])).toEqual([
       ['5h 41% 3h 12m · 7d 19% 6d 0h · ctx 80k/200k 40% · 40k left · saved ~172k', { dimColor: true }],
     ])
+  })
+
+  test('desktop: a session with no reply yet shows the limits kept in the store; a window past its reset shows reset', { plugins: [publisher] }, async ($, on) => {
+    // Measured in another session a minute ago; the engine here knows none yet.
+    const kept = [{ ...READ_LIMITS[0], resetsAt: '2026-10-07T12:02:00.000Z' }, READ_LIMITS[1]]
+    mock.store(on, { limits: { limits: kept, at: NOW - 60_000 } })
+    const ui = await band($, on, 'desktop', undefined, 40, '2.1.295', [])
+    const limitTexts = async () => (await ui.findAll({ type: 'Text' })).map(t => t.text).slice(0, 6)
+    const limitBars = async () => (await ui.findAll({ type: 'Svg' })).map(s => (s.props as { alt: string }).alt).filter(a => /^(5h|7d) bar, /.test(a))
+    expect(await limitTexts()).toEqual(['41%', '5h', 'resets 2m', '19%', '7d', 'resets 6d 0h'])
+    // Past the 5h reset, at the band's next minute: that window starts again from empty.
+    await clock.advance(3 * 60_000)
+    expect(await limitTexts()).toEqual(['0%', '5h', 'reset', '19%', '7d', 'resets 5d 23h'])
+    expect(await limitBars()).toEqual(['5h bar, 0%', '7d bar, 19%'])
   })
 
   test('rotation: a compaction cuts in at the next loop boundary for two loops, then the rotation resumes', () => {

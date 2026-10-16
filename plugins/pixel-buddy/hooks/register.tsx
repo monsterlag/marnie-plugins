@@ -16,6 +16,8 @@ const now = atom({ plugin: 'pixel-buddy', key: 'now' } as const, 0)
 const minute = atom({ plugin: 'pixel-buddy', key: 'minute' } as const, 0)
 const ctx = atom({ plugin: 'pixel-buddy', key: 'ctx' } as const, null as Ctx | null)
 const limits = atom({ plugin: 'pixel-buddy', key: 'limits' } as const, [] as Limit[])
+// When the list in `limits` was measured (in this session or another); 0 before any.
+const limitsAt = atom({ plugin: 'pixel-buddy', key: 'limitsAt' } as const, 0)
 // The compaction value as last looked at, when each compaction since this mood began was
 // noticed, and the sub-agents spawned and not yet forgotten: the cues for event scenes.
 const compSeen = atom({ plugin: 'pixel-buddy', key: 'compSeen' } as const, null as { count: number; lastAt: number | null } | null)
@@ -166,6 +168,40 @@ async function watchCompaction($: EngineInterface) {
   if (current?.count !== seen?.count || current?.lastAt !== seen?.lastAt || !current !== !seen) await update($, compSeen, () => current)
 }
 
+// The rate limits are the account's, and the engine learns them only from a reply's
+// headers, so a session with no reply of its own yet (new, resumed, reloaded) knows
+// none. The last list measured in any session is kept in the plugin's store under this
+// key, as { limits, at }, for every session to show. The store is a convenience: a
+// failed read or write is ignored.
+const LIMITS_KEY = 'limits'
+
+// A reply's list: this session's own, and the store's.
+async function keepLimits($: EngineInterface, list: Limit[]) {
+  const t = await $.clock.now()
+  await update($, limits, () => list)
+  await update($, limitsAt, () => t)
+  try {
+    await $.store.set(LIMITS_KEY, { limits: list, at: t })
+  } catch {
+    // Shown here; the other sessions wait for their own reply.
+  }
+}
+
+// Takes the stored list when it was measured after the one this session holds. An
+// empty or unreadable entry changes nothing, so a known list is never cleared.
+async function adoptLimits($: EngineInterface) {
+  try {
+    const kept = (await $.store.get(LIMITS_KEY)) as { limits?: unknown; at?: unknown } | undefined
+    if (!kept || !Array.isArray(kept.limits) || !kept.limits.length || typeof kept.at !== 'number') return
+    const at = kept.at
+    if (at <= (await read($, limitsAt))) return
+    await update($, limits, () => kept.limits as Limit[])
+    await update($, limitsAt, () => at)
+  } catch {
+    // The session keeps what it has.
+  }
+}
+
 // Which mood's scene shows `elapsed` seconds into a mood, and how far into that mood:
 // done hands off to relax after its one loop, relax to idle. `seed` is the entry's.
 function sceneFor(m: Mood, elapsed: number, seed: number): { mood: Mood; t: number } {
@@ -275,14 +311,19 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const u = await $.session.usage()
     await update($, ctx, () => u.context)
-    await update($, limits, () => u.rateLimits)
+    // The engine's list is empty before this process's first reply; one it does hold
+    // fills an empty band and gives way to anything measured since.
+    if (u.rateLimits.length && !(await read($, limits)).length) await update($, limits, () => u.rateLimits)
+    await adoptLimits($)
     const t0 = await $.clock.now()
     await update($, minute, () => t0)
 
-    // Keep "resets in" fresh, and tick the cache countdown while it is warm.
+    // Keep "resets in" fresh and the limits as last measured in any session, and tick
+    // the cache countdown while it is warm.
     $.clock.every(60_000, async () => {
       const t = await $.clock.now()
       await update($, minute, () => t)
+      await adoptLimits($)
     })
     await update($, moodAt, () => t0)
     try {
@@ -307,7 +348,7 @@ export const register: Register = (on, options) => {
   // Each response refreshes the prompt cache and reports the live usage.
   on('session.measure', async ($, e, next) => {
     await update($, ctx, () => e.context)
-    if (e.rateLimits.length) await update($, limits, () => e.rateLimits)
+    if (e.rateLimits.length) await keepLimits($, e.rateLimits)
     if (e.changed.includes('context')) {
       const t = await $.clock.now()
       await update($, cacheAt, () => t)
@@ -371,13 +412,16 @@ export const register: Register = (on, options) => {
 
     const limitStat = (kind: string, label: string): Stat => {
       const lim = rl.find(l => l.kind === kind)
+      // A window whose reset has passed starts empty; its percent is from before it.
+      const isReset = Boolean(lim?.resetsAt && t && Date.parse(lim.resetsAt) <= t)
+      const percent = isReset ? 0 : Math.round(lim?.percentUsed ?? 0)
       return {
         key: kind,
         label,
-        value: lim ? `${Math.round(lim.percentUsed)}%` : '–',
+        value: lim ? `${percent}%` : '–',
         unit: label,
-        caption: lim?.resetsAt && t ? `resets ${span(Date.parse(lim.resetsAt) - t)}` : 'waiting',
-        bar: { percent: Math.round(lim?.percentUsed ?? 0) },
+        caption: isReset ? 'reset' : lim?.resetsAt && t ? `resets ${span(Date.parse(lim.resetsAt) - t)}` : 'waiting',
+        bar: { percent },
       }
     }
     const left = comp ? leftToCompact(c, comp.compactAtPercent) : undefined
