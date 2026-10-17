@@ -35,9 +35,11 @@ marketplace is named `monsterlag-plugins`.
   sessions by itself within a few minutes (`/reload-plugins` does it at once).
 - **The 2026-10-09 evening regression** (app crawling, band freezing) and its fix are written up
   under "Frame load". The fix is released; whether it holds over hours is not yet known.
-- The installed version is the commit sha: the root `.claude-plugin/plugin.json` version is not
-  what the marketplace keys on, and `claude plugin validate .` fails on the root manifest's
-  `types` path (an upstream layout quirk, left alone).
+- **The manifest lives in `plugins/pixel-buddy/.claude-plugin/plugin.json`** (since 2026-10-17).
+  Upstream kept it at the repo root, where the marketplace (source `./plugins/pixel-buddy`) never
+  read it: the desktop app's Plugins screen showed no author or description, and the `cacheTtl`
+  option never reached the plugin. ("0 skills" stays: the app counts SKILL.md folders, and this plugin has none.) It has no `version` on purpose: the installed version
+  is the commit sha, so every push is picked up (`validate` warns about it; that is expected).
 
 ## What the band is
 
@@ -78,7 +80,7 @@ Read from the two app bundles (the old one from the 2026-10-12 Time Machine snap
   declarative animation needs neither script nor network.
 - **Text got typography**: `size` (caption, footnote, body, heading, title), `weight` (regular,
   medium, semibold, bold), `mono`, `tabular`. The engine has to let them through: 2.1.295, which
-  the desktop app still pins for its sessions (`required_version:2.1.295` in its log), refuses a
+  the desktop app pinned for its sessions until 2026-10-17 (now `required_version:2.1.299`), refuses a
   tree that sets one (`Text prop "tabular" is not allowed`, and the band goes blank); 2.1.299
   accepts them. The band sets `tabular` on its values only when `$.session.version()` is at least
   2.1.299 (`TABULAR_FROM`), so today it does nothing on the desktop and turns on by itself when

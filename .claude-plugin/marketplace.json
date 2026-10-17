@@ -1,12 +1,19 @@
 {
   "name": "monsterlag-plugins",
-  "owner": { "name": "monsterlag" },
+  "owner": {
+    "name": "monsterlag",
+    "url": "https://github.com/monsterlag"
+  },
   "description": "A collection of plugins for Claude Code",
   "plugins": [
     {
       "name": "pixel-buddy",
       "source": "./plugins/pixel-buddy",
-      "description": "Usage meters, a pixel-art mascot, and a prompt-cache timer + context meter"
+      "description": "Exact 5h/7d usage and context figures with a pixel-art mascot in a band above the prompt, and a prompt-cache timer + context meter by the model picker",
+      "author": {
+        "name": "monsterlag",
+        "url": "https://github.com/monsterlag"
+      }
     }
   ]
 }
