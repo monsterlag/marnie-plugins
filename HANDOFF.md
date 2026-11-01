@@ -4,7 +4,17 @@ Fork of `hamymarnie/marnie-plugins`. Remotes: `origin` = monsterlag/marnie-plugi
 `upstream` = hamymarnie/marnie-plugins. The plugin lives in `plugins/pixel-buddy/`; the
 marketplace is named `monsterlag-plugins`.
 
-## Where things stand (2026-10-15)
+## Where things stand (2026-10-31)
+
+- **2026-10-31, the 5h column follows the plan.** Claude Ultra ($200/month, claude.com/pricing)
+  has no 5-hour limit for verified accounts, and the engine then reports only `seven_day`
+  (measured on the owner's Ultra account, 2.1.316). A plugin cannot read the plan
+  (`$.session.identity()` is for org-managed mods only), so the band draws a column for each
+  window in `LIMIT_WINDOWS` that the known list holds; before any list is known, both wait.
+  Pro, Max and unverified Ultra still report `five_hour` and keep the column. Terminal line
+  likewise. 18 tests (4 new), also under the app's engine 2.1.309; not yet seen in the app.
+
+## Earlier (2026-10-15)
 
 - **2026-10-15, 5h/7d columns fixed (not yet released).** The engine learns rate limits only
   from a reply's headers: `$.session.usage().rateLimits` is `[]` at `session.start` (measured on
@@ -43,8 +53,8 @@ marketplace is named `monsterlag-plugins`.
 
 ## What the band is
 
-- **Stats, native text:** four columns of bold value, dim label and a thin SVG bar: 5h limit,
-  7d limit, context tokens (with a tick at the compaction trigger), and tokens left before
+- **Stats, native text:** up to four columns of bold value, dim label and a thin SVG bar: 5h limit
+  (only where the account has one), 7d limit, context tokens (with a tick at the compaction trigger), and tokens left before
   compaction with the last saved amount. The last two come from a value another plugin
   publishes, `{ plugin: 'monster-compact', key: 'compaction' }` (contract mirrored in
   `types/index.d.ts`); without a valid value there are three columns and no tick. The limits

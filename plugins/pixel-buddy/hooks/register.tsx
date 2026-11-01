@@ -174,6 +174,11 @@ async function watchCompaction($: EngineInterface) {
 // key, as { limits, at }, for every session to show. The store is a convenience: a
 // failed read or write is ignored.
 const LIMITS_KEY = 'limits'
+// The rate-limit windows the band has a column for, in order: kind and label.
+const LIMIT_WINDOWS: [string, string][] = [
+  ['five_hour', '5h'],
+  ['seven_day', '7d'],
+]
 
 // A reply's list: this session's own, and the store's.
 async function keepLimits($: EngineInterface, list: Limit[]) {
@@ -398,8 +403,8 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // The band above the prompt: a column of exact figures each for the 5h and 7d limits
-  // and the context (a fourth, tokens left before the next compaction, while
+  // The band above the prompt: a column of exact figures each for the account's limits
+  // (5h and 7d, or 7d alone on a plan without a 5h limit) and the context (a fourth, tokens left before the next compaction, while
   // monster-compact publishes one), led by the mascot at the left.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
@@ -424,10 +429,12 @@ export const register: Register = (on, options) => {
         bar: { percent },
       }
     }
+    // Which windows apply depends on the plan (Ultra has no 5h limit), and the engine only
+    // reports the ones the account has; before any list is known, both wait.
+    const windows = LIMIT_WINDOWS.filter(([kind]) => !rl.length || rl.some(l => l.kind === kind))
     const left = comp ? leftToCompact(c, comp.compactAtPercent) : undefined
     const stats: Stat[] = [
-      limitStat('five_hour', '5h'),
-      limitStat('seven_day', '7d'),
+      ...windows.map(([kind, label]) => limitStat(kind, label)),
       {
         key: 'context',
         label: 'context',
@@ -450,12 +457,11 @@ export const register: Register = (on, options) => {
     ]
 
     if (e.surface !== 'desktop' && e.surface !== 'vscode') {
-      const [five, seven, context] = stats as [Stat, Stat, Stat]
+      const context = stats[windows.length] as Stat
       const limitText = (s: Stat) => [s.label, s.value, ...(s.caption.startsWith('resets ') ? [s.caption.slice(7)] : [])].join(' ')
       const saved = comp ? savedText(comp) : undefined
       const line = [
-        limitText(five),
-        limitText(seven),
+        ...stats.slice(0, windows.length).map(limitText),
         c?.tokens === undefined ? 'ctx –' : `ctx ${context.value}/${kTokens(c.window)}${c.percent === undefined ? '' : ` ${Math.round(c.percent)}%`}`,
         ...(comp ? [`${left === undefined ? '–' : kTokens(left)} left`, ...(saved ? [saved] : [])] : []),
       ].join(' · ')
@@ -496,7 +502,7 @@ export const register: Register = (on, options) => {
       </Box>
     )
     // The columns go in pairs that never break, so a narrow band wraps them to two
-    // rows of two (5h 7d over context and to-compact), never three and one.
+    // rows (the limits over context and to-compact), never three and one.
     const pair = (key: string, pairStats: Stat[]) => (
       <Box key={key} flexDirection="row" alignItems="flex-start" gap={STAT_GAP} flexShrink={0}>
         {pairStats.map(column)}
@@ -518,7 +524,7 @@ export const register: Register = (on, options) => {
         />
       )
     }
-    const statPairs = [pair('limits', stats.slice(0, 2)), pair('session', stats.slice(2))]
+    const statPairs = [pair('limits', stats.slice(0, windows.length)), pair('session', stats.slice(windows.length))]
 
     // Wide: one row that never wraps, so the band keeps the height the bled picture's
     // outline was measured for. The picture is out of the flow, pinned by its top-left

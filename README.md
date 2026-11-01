@@ -4,7 +4,7 @@
 Simple Claude Code plugin that shows usage meters, and a cache timer. That's really about it.
 
 This is a fork of [hamymarnie/marnie-plugins](https://github.com/hamymarnie/marnie-plugins) with a redrawn band above the prompt.
-The band shows exact figures for the 5h and 7d limits and the context, each with a thin bar, led by a pixel-art portrait of the mascot that runs into the band's edge. The portrait plays short looping scenes chosen by mood (working, done, relaxing, idle), and event scenes cut in: a compaction, and sub-agents at work.
+The band shows exact figures for the account's usage limits (5h and 7d, or 7d alone on a plan without a 5h limit, such as Ultra) and the context, each with a thin bar, led by a pixel-art portrait of the mascot that runs into the band's edge. The portrait plays short looping scenes chosen by mood (working, done, relaxing, idle), and event scenes cut in: a compaction, and sub-agents at work.
 With the [monster-compact](https://github.com/monsterlag/monster-compact) plugin (0.7.0 or later) the band also shows the tokens left before the next compaction and what the last one saved; without it those are left out.
 
 ```

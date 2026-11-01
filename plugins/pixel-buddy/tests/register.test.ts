@@ -26,10 +26,8 @@ const TICK = '<rect x="42.20" y="0" width="2" height="7" fill="#e8e6df"/>'
 // The mocked clock of the band last mounted.
 let clock: ReturnType<typeof mock.clock>
 
-const READ_LIMITS = [
-  { kind: 'five_hour', percentUsed: 41, resetsAt: '2026-10-07T15:12:00.000Z' },
-  { kind: 'seven_day', percentUsed: 19, resetsAt: '2026-10-13T12:00:00.000Z' },
-]
+const WEEK = { kind: 'seven_day', percentUsed: 19, resetsAt: '2026-10-13T12:00:00.000Z' }
+const READ_LIMITS = [{ kind: 'five_hour', percentUsed: 41, resetsAt: '2026-10-07T15:12:00.000Z' }, WEEK]
 
 // A session whose context stands at `percent` (none before a reading), with the usage
 // windows the engine reports at its start (both read, unless given), and the band
@@ -125,6 +123,30 @@ describe('register', () => {
     await clock.advance(3 * 60_000)
     expect(await limitTexts()).toEqual(['0%', '5h', 'reset', '19%', '7d', 'resets 5d 23h'])
     expect(await limitBars()).toEqual(['5h bar, 0%', '7d bar, 19%'])
+  })
+
+  test('desktop: a plan without a 5h limit (Ultra) shows the 7d column alone', { plugins: [publisher] }, async ($, on) => {
+    const ui = await band($, on, 'desktop', ONE, 40, '2.1.295', [WEEK])
+    const tree = (await ui.drawn()) as unknown as { children: { children: { props: { key: string } }[] }[] }
+    expect(tree.children[2]?.children.map(c => c.props.key)).toEqual(['seven_day', 'context', 'compact'])
+    const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+    expect(texts).toEqual(['19%', '7d', 'resets 6d 0h', ...CONTEXT, '40k', 'left', 'saved ~172k'])
+  })
+
+  test('terminal: a plan without a 5h limit leaves it off the line', { plugins: [publisher] }, async ($, on) => {
+    const ui = await band($, on, 'terminal', ONE, 40, '2.1.295', [WEEK])
+    expect((await ui.findAll({ type: 'Text' })).map(t => t.text)).toEqual(['7d 19% 6d 0h · ctx 80k/200k 40% · 40k left · saved ~172k'])
+  })
+
+  test('desktop: before any list is known both windows wait', { plugins: [publisher] }, async ($, on) => {
+    const ui = await band($, on, 'desktop', undefined, 40, '2.1.295', [])
+    expect((await ui.findAll({ type: 'Text' })).map(t => t.text).slice(0, 6)).toEqual(['–', '5h', 'waiting', '–', '7d', 'waiting'])
+  })
+
+  test('desktop: a 7d-only list kept in the store drops the 5h column in a session with no reply yet', { plugins: [publisher] }, async ($, on) => {
+    mock.store(on, { limits: { limits: [WEEK], at: NOW - 60_000 } })
+    const ui = await band($, on, 'desktop', undefined, 40, '2.1.295', [])
+    expect((await ui.findAll({ type: 'Text' })).map(t => t.text).slice(0, 3)).toEqual(['19%', '7d', 'resets 6d 0h'])
   })
 
   test('rotation: a compaction cuts in at the next loop boundary for two loops, then the rotation resumes', () => {
