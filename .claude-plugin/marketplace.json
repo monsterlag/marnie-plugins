@@ -9,7 +9,7 @@
     {
       "name": "pixel-buddy",
       "source": "./plugins/pixel-buddy",
-      "description": "Exact 5h/7d usage and context figures with a pixel-art mascot in a band above the prompt, and a prompt-cache timer + context meter by the model picker",
+      "description": "Exact usage-limit figures (5h and 7d, or 7d alone on a plan without a 5h limit), context figures with a pixel-art mascot in a band above the prompt, and a prompt-cache timer + context meter by the model picker",
       "author": {
         "name": "monsterlag",
         "url": "https://github.com/monsterlag"

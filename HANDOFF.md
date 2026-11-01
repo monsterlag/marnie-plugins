@@ -24,6 +24,14 @@ marketplace is named `monsterlag-plugins`.
   the narrow layout for a `spend_limit`-only list; that window still has no column).
   `plugin.json` description updated. 23 tests.
 
+- **2026-10-31 night, band redesign** (owner: the 3-column band "looks bloody awful"). See "What
+  the band is". Iterated in the app on four rounds of screenshots from a local dev install
+  (marketplace `pixel-buddy-dev` in `~/Claude Projects/pixel-buddy-dev-marketplace`, a copy of the
+  plugin folder; a symlinked plugin is refused as a path outside the marketplace). Screenshots:
+  `screencapture -l <window id>` of the Claude window from the shell (computer use refuses Claude's
+  own window); the session whose turn is running does not reload, so capture another session.
+  Seen only at the owner's narrower window width (right panel open), not at full width.
+
 ## Earlier (2026-10-15)
 
 - **2026-10-15, 5h/7d columns fixed (not yet released).** The engine learns rate limits only
@@ -63,19 +71,24 @@ marketplace is named `monsterlag-plugins`.
 
 ## What the band is
 
-- **Stats, native text:** up to four columns of bold value, dim label and a thin SVG bar: 5h limit
-  (only where the account has one), 7d limit, context tokens (with a tick at the compaction trigger), and tokens left before
-  compaction with the last saved amount. The last two come from a value another plugin
-  publishes, `{ plugin: 'monster-compact', key: 'compaction' }` (contract mirrored in
-  `types/index.d.ts`); without a valid value there are three columns and no tick. The limits
+- **Stats, native text:** a block per figure, each a large value (`title` size, semibold,
+  tabular where the engine takes them, from 2.1.299; plain bold before), a dim unit, a dim caption
+  and a bar that stretches to the block's width (a 1000-unit drawing scaled without proportion,
+  its lines `non-scaling-stroke`). Blocks: 5h limit (only where the account has one), 7d limit,
+  and context, which takes twice a limit's width and carries a tick at the compaction trigger and
+  `N% used · Xk to compact · saved Yk` in its caption. The to-compact and saved figures come
+  from a value another plugin publishes, `{ plugin: 'monster-compact', key: 'compaction' }`
+  (contract mirrored in `types/index.d.ts`); without a valid value the caption is `N% used` and
+  the bar has no tick. The limits
   are the last measured in any session (kept in `$.store`); a window past its reset shows
   `0%` and `reset`.
 - **Mascot portrait on the left:** a 216x104 SVG at 4x pixels in an absolutely positioned Box at
   negative cell offsets, so it bleeds into the band's padding; a clip path rounds its two left
-  corners to the band's outline; a gradient fades its right side into the band.
-- **Two layouts**, chosen by `bodyColumns` against `WIDE_MIN_COLUMNS` (84): wide as above with the
-  stats spread across the remaining width; narrow with the picture inline on its own row
-  (192x72, its own rounded corners) and the stats wrapping underneath.
+  corners to the band's outline; a mask fades its right side to transparent (a fade to the fixed
+  `BAND_BG` left a seam: the app's band is lighter).
+- **Two layouts**, chosen by `bodyColumns` against `WIDE_MIN_COLUMNS` (60): wide as above with the
+  blocks sharing the remaining width; narrow with the picture inline on its own row (192x72, its
+  own rounded corners) and the blocks in one row underneath.
 - **Scenes:** 22 native scenes on a 48x18 grid, each loop drawn as one self-animating picture
   (see "Self-animating mascot"). Moods: working (7, including
   `fallback`), done (1, plays once), relax (6), idle (6, including `waiting`). Order is shuffled
@@ -405,8 +418,6 @@ grown; only relaunching the app does.
 - No backstop for a turn that never reports its end (owner declined one, 2026-10-09).
 - `0k left` when context is past the trigger could show the overrun instead.
 - `compaction` and `subagents` cut-ins are verified in the test kit, not yet seen in the app.
-- `WIDE_MIN_COLUMNS` is conservative: there is a range of widths where the wide layout would
-  fit but the narrow one is used.
 - Upstream has no LICENSE file.
 
 ## How changes are made here
