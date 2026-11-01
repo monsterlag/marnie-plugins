@@ -6,9 +6,10 @@ marketplace is named `monsterlag-plugins`.
 
 ## Start here (state on 2026-11-01)
 
-- **Released and installed:** `main` = `c1241da` on GitHub (`monsterlag/marnie-plugins`), installed
-  on the owner's Mac as `pixel-buddy@monsterlag-plugins` (version shows as the commit sha). Working
-  tree clean, `main` level with `origin/main`. Only the Mac has the plugin.
+- **Released and installed:** the code on `main` (GitHub `monsterlag/marnie-plugins`) is `c1241da`;
+  later commits change only this file. Installed on the owner's Mac as
+  `pixel-buddy@monsterlag-plugins` at `c1241da` (the version shows as the commit sha). Working tree
+  clean, `main` level with `origin/main`. Only the Mac has the plugin.
 - **Owner's account is Claude Ultra** (since late October 2026): no 5-hour limit, so the engine
   reports only `seven_day` and the band shows two blocks, 7d and context.
 - **The band was redesigned on 2026-10-31** after the owner called the three-column version
