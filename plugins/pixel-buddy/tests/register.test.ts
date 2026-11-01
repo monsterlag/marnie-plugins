@@ -180,7 +180,7 @@ describe('register', () => {
     expect(tree.children[1]?.children.map(c => c.props.key)).toEqual(['context'])
   })
 
-  test('desktop: a band from 60 cells puts the mascot beside the stats; below, above them', { plugins: [publisher] }, async ($, on) => {
+  test('desktop: two blocks from 60 cells put the mascot beside the stats; below, above them', { plugins: [publisher] }, async ($, on) => {
     await band($, on, 'desktop', ONE, 40, '2.1.295', [WEEK])
     const shape = async (bodyColumns: number) => {
       const ui = await $.ui.mount({ plugin: 'pixel-buddy', surface: 'desktop', component: 'AbovePrompt', props: { ...PROPS, bodyColumns } })
@@ -190,6 +190,16 @@ describe('register', () => {
     }
     expect(await shape(60)).toEqual({ mascotWidth: 216, keys: ['seven_day', 'context'] })
     expect(await shape(59)).toEqual({ mascotWidth: 192, keys: ['seven_day', 'context'] })
+  })
+
+  test('desktop: three blocks (a 5h limit too) need 78 cells beside the mascot', { plugins: [publisher] }, async ($, on) => {
+    await band($, on, 'desktop', ONE, 40)
+    const mascotWidth = async (bodyColumns: number) => {
+      const ui = await $.ui.mount({ plugin: 'pixel-buddy', surface: 'desktop', component: 'AbovePrompt', props: { ...PROPS, bodyColumns } })
+      return (await ui.findAll({ type: 'Svg' })).map(s => s.props as { alt: string; width: number }).find(s => s.alt.startsWith('Claude is'))?.width
+    }
+    expect(await mascotWidth(78)).toBe(216)
+    expect(await mascotWidth(77)).toBe(192)
   })
 
   test('desktop: the engine\'s own list at session start outranks an older stored one', { plugins: [publisher] }, async ($, on) => {

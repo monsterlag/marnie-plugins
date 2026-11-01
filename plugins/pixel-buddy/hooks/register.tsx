@@ -53,9 +53,10 @@ const COMPACTION_CARRY_S = 20
 // picture's scene part holds its room in the row. Offsets are whole character cells
 // from the root row's edges, negative outward. Off, the narrow layout is always used.
 const BLEED: boolean = true
-// The bleed layout is used from this many band cells (bodyColumns); below, or with
-// BLEED off, the narrow layout.
-const WIDE_MIN_COLUMNS = 60
+// The bleed layout is used from this many band cells (bodyColumns), by the number of
+// stat blocks: below it a block is too narrow for its value and unit, and the narrow
+// layout (or BLEED off) shows them in full under the picture.
+const WIDE_MIN_COLUMNS = (blockCount: number) => (blockCount >= 3 ? 78 : 60)
 const BLEED_TOP = -1
 const BLEED_LEFT = -2
 // The blank that holds the bled picture's room, in CSS pixels.
@@ -540,7 +541,7 @@ export const register: Register = (on, options) => {
     // outline was measured for. The picture is out of the flow, pinned by its top-left
     // corner past the band's edge; the blank holds its room before the stats, which share
     // the rest of the band.
-    if (BLEED && e.props.bodyColumns >= WIDE_MIN_COLUMNS) {
+    if (BLEED && e.props.bodyColumns >= WIDE_MIN_COLUMNS(blocks.length)) {
       return (
         <Box position="relative" flexDirection="row" alignItems="center" flexWrap="nowrap" columnGap={MASCOT_GAP} paddingX={1}>
           <Box position="absolute" top={BLEED_TOP} left={BLEED_LEFT} flexDirection="row" alignItems="flex-start">

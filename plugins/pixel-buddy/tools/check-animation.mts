@@ -35,7 +35,7 @@ const changed = (a: PNG, b: PNG) => {
     if (Math.abs(a.data[k]! - b.data[k]!) + Math.abs(a.data[k + 1]! - b.data[k + 1]!) + Math.abs(a.data[k + 2]! - b.data[k + 2]!) > 40) n++
   return n
 }
-const ids = (svg: string, tag: string) => svg.replaceAll('id="edge"', `id="edge${tag}"`).replaceAll('url(#edge)', `url(#edge${tag})`).replaceAll('id="fade"', `id="fade${tag}"`).replaceAll('url(#fade)', `url(#fade${tag})`)
+const ids = (svg: string, tag: string) => svg.replaceAll('id="edge"', `id="edge${tag}"`).replaceAll('url(#edge)', `url(#edge${tag})`).replaceAll('id="fade"', `id="fade${tag}"`).replaceAll('url(#fade)', `url(#fade${tag})`).replaceAll('id="fadeout"', `id="fadeout${tag}"`).replaceAll('url(#fadeout)', `url(#fadeout${tag})`)
 
 let failures = 0
 for (const s of scenes) {

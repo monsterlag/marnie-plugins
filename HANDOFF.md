@@ -86,7 +86,8 @@ marketplace is named `monsterlag-plugins`.
   negative cell offsets, so it bleeds into the band's padding; a clip path rounds its two left
   corners to the band's outline; a mask fades its right side to transparent (a fade to the fixed
   `BAND_BG` left a seam: the app's band is lighter).
-- **Two layouts**, chosen by `bodyColumns` against `WIDE_MIN_COLUMNS` (60): wide as above with the
+- **Two layouts**, chosen by `bodyColumns` against `WIDE_MIN_COLUMNS` (60 for two blocks, 78
+  for three: below that a Pro/Max limit block clips its value): wide as above with the
   blocks sharing the remaining width; narrow with the picture inline on its own row (192x72, its
   own rounded corners) and the blocks in one row underneath.
 - **Scenes:** 22 native scenes on a 48x18 grid, each loop drawn as one self-animating picture
