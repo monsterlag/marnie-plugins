@@ -2,7 +2,7 @@ import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import type { Compaction } from '../types'
+import type { Compaction, Limit } from '../types'
 import { eventScenes, nativeScenes } from '../hooks/native'
 import { compact, flatten, topLevel } from '../hooks/animate'
 import { compactionFired, pick } from '../hooks/rotation'
@@ -33,10 +33,11 @@ const READ_LIMITS = [{ kind: 'five_hour', percentUsed: 41, resetsAt: '2026-10-07
 // windows the engine reports at its start (both read, unless given), and the band
 // mounted on `surface`. `seated` is what monster-compact has published; undefined is
 // that plugin publishing nothing.
-async function band<S extends 'terminal' | 'desktop'>($: Engine, on: On, surface: S, seated?: Compaction, percent?: number, version = '2.1.295', rateLimits = READ_LIMITS) {
+async function band<S extends 'terminal' | 'desktop'>($: Engine, on: On, surface: S, seated?: Compaction, percent?: number, version = '2.1.295', rateLimits: Limit[] = READ_LIMITS) {
   clock = mock.clock(on, { now: NOW })
   mock.env(on, seated ? { COMPACTION: JSON.stringify(seated) } : {})
   on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('session.version', () => ({ value: { version, base: version } }))
   on('session.usage', () => ({
     value: {
@@ -147,6 +148,47 @@ describe('register', () => {
     mock.store(on, { limits: { limits: [WEEK], at: NOW - 60_000 } })
     const ui = await band($, on, 'desktop', undefined, 40, '2.1.295', [])
     expect((await ui.findAll({ type: 'Text' })).map(t => t.text).slice(0, 3)).toEqual(['19%', '7d', 'resets 6d 0h'])
+  })
+
+  test('desktop: a reply with no rate limits (off a subscription) leaves the limit columns out', { plugins: [publisher] }, async ($, on) => {
+    const ui = await band($, on, 'desktop', undefined, 40, '2.1.295', [])
+    await $.session.measure({ context: { window: 200_000, tokens: 80_000, percent: 40 }, rateLimits: [], changed: ['context'] })
+    const tree = (await ui.drawn()) as unknown as { children: { children: { props: { key: string } }[] }[] }
+    expect(tree.children[2]?.children.map(c => c.props.key)).toEqual(['context'])
+    expect((await ui.findAll({ type: 'Text' })).map(t => t.text)).toEqual(CONTEXT)
+  })
+
+  test('desktop: a status-change measure lacking the 5h window keeps it; a reply lacking it drops it', { plugins: [publisher] }, async ($, on) => {
+    const ui = await band($, on, 'desktop', undefined, 40)
+    const keys = async () => ((await ui.drawn()) as unknown as { children: { children: { props: { key: string } }[] }[] }).children[2]?.children.map(c => c.props.key)
+    const context = { window: 200_000, tokens: 80_000, percent: 40 }
+    await $.session.measure({ context, rateLimits: [WEEK], changed: ['rateLimits'] })
+    expect(await keys()).toEqual(['five_hour', 'seven_day', 'context'])
+    await $.session.measure({ context, rateLimits: [WEEK], changed: ['context', 'rateLimits'] })
+    expect(await keys()).toEqual(['seven_day', 'context'])
+  })
+
+  test('desktop: a list of no known window draws a narrow band without an empty limits pair', { plugins: [publisher] }, async ($, on) => {
+    await band($, on, 'desktop', ONE, 40, '2.1.295', [{ kind: 'spend_limit', percentUsed: 30 }])
+    const ui = await $.ui.mount({ plugin: 'pixel-buddy', surface: 'desktop', component: 'AbovePrompt', props: { ...PROPS, bodyColumns: 60 } })
+    const tree = (await ui.drawn()) as unknown as { children: { children: { props: { key: string } }[] }[] }
+    expect(tree.children[1]?.children.map(c => c.props.key)).toEqual(['session'])
+  })
+
+  test('desktop: a narrow band with the 7d window alone pairs it on its own', { plugins: [publisher] }, async ($, on) => {
+    await band($, on, 'desktop', ONE, 40, '2.1.295', [WEEK])
+    const ui = await $.ui.mount({ plugin: 'pixel-buddy', surface: 'desktop', component: 'AbovePrompt', props: { ...PROPS, bodyColumns: 60 } })
+    const tree = (await ui.drawn()) as unknown as { children: { children: { props: { key: string }; children: { props: { key: string } }[] }[] }[] }
+    expect(tree.children[1]?.children.map(p => [p.props.key, p.children.map(c => c.props.key)])).toEqual([
+      ['limits', ['seven_day']],
+      ['session', ['context', 'compact']],
+    ])
+  })
+
+  test('desktop: the engine\'s own list at session start outranks an older stored one', { plugins: [publisher] }, async ($, on) => {
+    mock.store(on, { limits: { limits: [WEEK], at: NOW - 60_000 } })
+    const ui = await band($, on, 'desktop', undefined, 40)
+    expect((await ui.findAll({ type: 'Text' })).map(t => t.text).slice(0, 6)).toEqual(LIMITS)
   })
 
   test('rotation: a compaction cuts in at the next loop boundary for two loops, then the rotation resumes', () => {

@@ -18,6 +18,9 @@ const ctx = atom({ plugin: 'pixel-buddy', key: 'ctx' } as const, null as Ctx | n
 const limits = atom({ plugin: 'pixel-buddy', key: 'limits' } as const, [] as Limit[])
 // When the list in `limits` was measured (in this session or another); 0 before any.
 const limitsAt = atom({ plugin: 'pixel-buddy', key: 'limitsAt' } as const, 0)
+// True once a reply came with no rate limits and none is known: the session is off a
+// subscription (an API key, a cloud provider), so the band has no limit columns.
+const noLimits = atom({ plugin: 'pixel-buddy', key: 'noLimits' } as const, false)
 // The compaction value as last looked at, when each compaction since this mood began was
 // noticed, and the sub-agents spawned and not yet forgotten: the cues for event scenes.
 const compSeen = atom({ plugin: 'pixel-buddy', key: 'compSeen' } as const, null as { count: number; lastAt: number | null } | null)
@@ -183,6 +186,7 @@ const LIMIT_WINDOWS: [string, string][] = [
 // A reply's list: this session's own, and the store's.
 async function keepLimits($: EngineInterface, list: Limit[]) {
   const t = await $.clock.now()
+  await update($, noLimits, () => false)
   await update($, limits, () => list)
   await update($, limitsAt, () => t)
   try {
@@ -318,9 +322,13 @@ export const register: Register = (on, options) => {
     await update($, ctx, () => u.context)
     // The engine's list is empty before this process's first reply; one it does hold
     // fills an empty band and gives way to anything measured since.
-    if (u.rateLimits.length && !(await read($, limits)).length) await update($, limits, () => u.rateLimits)
-    await adoptLimits($)
     const t0 = await $.clock.now()
+    // Dated now, so an older stored list does not replace it.
+    if (u.rateLimits.length && !(await read($, limits)).length) {
+      await update($, limits, () => u.rateLimits)
+      await update($, limitsAt, () => t0)
+    }
+    await adoptLimits($)
     await update($, minute, () => t0)
 
     // Keep "resets in" fresh and the limits as last measured in any session, and tick
@@ -353,7 +361,16 @@ export const register: Register = (on, options) => {
   // Each response refreshes the prompt cache and reports the live usage.
   on('session.measure', async ($, e, next) => {
     await update($, ctx, () => e.context)
-    if (e.rateLimits.length) await keepLimits($, e.rateLimits)
+    // A reply's headers name every window the account has. A measure without one (a
+    // limit status change) carries the windows whose reset has not passed by this
+    // clock, so a window it lacks is kept: an idle Pro session past its 5h reset still
+    // has a 5h limit. Only a reply can drop a window.
+    const isReply = e.changed.includes('context')
+    if (e.rateLimits.length) {
+      const known = await read($, limits)
+      const missing = isReply ? [] : known.filter(k => !e.rateLimits.some(l => l.kind === k.kind))
+      await keepLimits($, [...e.rateLimits, ...missing])
+    } else if (isReply && !(await read($, limits)).length) await update($, noLimits, () => true)
     if (e.changed.includes('context')) {
       const t = await $.clock.now()
       await update($, cacheAt, () => t)
@@ -411,6 +428,7 @@ export const register: Register = (on, options) => {
     const ui = $.ui.resolve(e)
     const { Box, Text } = ui
     const rl = await read($, limits)
+    const isOffPlan = await read($, noLimits)
     const t = await read($, minute)
     const c = await read($, ctx)
     const comp = published(await read($, compaction))
@@ -430,8 +448,9 @@ export const register: Register = (on, options) => {
       }
     }
     // Which windows apply depends on the plan (Ultra has no 5h limit), and the engine only
-    // reports the ones the account has; before any list is known, both wait.
-    const windows = LIMIT_WINDOWS.filter(([kind]) => !rl.length || rl.some(l => l.kind === kind))
+    // reports the ones the account has (each reply names them all); before any list is
+    // known, both wait, and off a subscription there are none.
+    const windows = isOffPlan && !rl.length ? [] : LIMIT_WINDOWS.filter(([kind]) => !rl.length || rl.some(l => l.kind === kind))
     const left = comp ? leftToCompact(c, comp.compactAtPercent) : undefined
     const stats: Stat[] = [
       ...windows.map(([kind, label]) => limitStat(kind, label)),
@@ -524,7 +543,11 @@ export const register: Register = (on, options) => {
         />
       )
     }
-    const statPairs = [pair('limits', stats.slice(0, windows.length)), pair('session', stats.slice(windows.length))]
+    // A pair with no columns is left out, so it adds no gap.
+    const statPairs = [
+      ...(windows.length ? [pair('limits', stats.slice(0, windows.length))] : []),
+      pair('session', stats.slice(windows.length)),
+    ]
 
     // Wide: one row that never wraps, so the band keeps the height the bled picture's
     // outline was measured for. The picture is out of the flow, pinned by its top-left

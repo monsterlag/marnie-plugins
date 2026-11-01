@@ -14,6 +14,16 @@ marketplace is named `monsterlag-plugins`.
   Pro, Max and unverified Ultra still report `five_hour` and keep the column. Terminal line
   likewise. 18 tests (4 new), also under the app's engine 2.1.309; not yet seen in the app.
 
+- **2026-10-31 later, the first gate's findings fixed.** Only a reply (`changed` holds
+  `context`) can drop a window: a measure raised by a limit-status change carries only windows
+  whose reset is still ahead by the local clock, so a window it lacks is kept (an idle Pro
+  session past its 5h reset keeps its column). A reply with no rate limits while none is known
+  sets `noLimits`: off a subscription (API key, cloud provider) the band has no limit columns
+  instead of two "waiting" forever. The engine's own list at `session.start` is dated then, so
+  an older stored list no longer replaces it. An empty limits pair is left out (no stray gap in
+  the narrow layout for a `spend_limit`-only list; that window still has no column).
+  `plugin.json` description updated. 23 tests.
+
 ## Earlier (2026-10-15)
 
 - **2026-10-15, 5h/7d columns fixed (not yet released).** The engine learns rate limits only
