@@ -4,70 +4,157 @@ Fork of `hamymarnie/marnie-plugins`. Remotes: `origin` = monsterlag/marnie-plugi
 `upstream` = hamymarnie/marnie-plugins. The plugin lives in `plugins/pixel-buddy/`; the
 marketplace is named `monsterlag-plugins`.
 
-## Where things stand (2026-10-31)
+## Start here (state on 2026-11-01)
 
-- **2026-10-31, the 5h column follows the plan.** Claude Ultra ($200/month, claude.com/pricing)
-  has no 5-hour limit for verified accounts, and the engine then reports only `seven_day`
-  (measured on the owner's Ultra account, 2.1.316). A plugin cannot read the plan
-  (`$.session.identity()` is for org-managed mods only), so the band draws a column for each
-  window in `LIMIT_WINDOWS` that the known list holds; before any list is known, both wait.
-  Pro, Max and unverified Ultra still report `five_hour` and keep the column. Terminal line
-  likewise. 18 tests (4 new), also under the app's engine 2.1.309; not yet seen in the app.
+- **Released and installed:** `main` = `c1241da` on GitHub (`monsterlag/marnie-plugins`), installed
+  on the owner's Mac as `pixel-buddy@monsterlag-plugins` (version shows as the commit sha). Working
+  tree clean, `main` level with `origin/main`. Only the Mac has the plugin.
+- **Owner's account is Claude Ultra** (since late October 2026): no 5-hour limit, so the engine
+  reports only `seven_day` and the band shows two blocks, 7d and context.
+- **The band was redesigned on 2026-10-31** after the owner called the three-column version
+  "bloody awful". The owner approved the new look from an in-app screenshot. It has been seen in
+  the app only at the owner's narrower window width (right-hand panel open, band about 690 CSS
+  px). Full width and the three-block (Pro/Max) layout were checked only in Fable's rebuild of the
+  app's layout, not by eye.
+- **Nothing is in progress.** No open branches from this work (`band-redesign` was merged and
+  deleted; the older `b1-band`, `scenes-*` branches are history). The temporary dev marketplace
+  `pixel-buddy-dev` and its folder were removed.
 
-- **2026-10-31 later, the first gate's findings fixed.** Only a reply (`changed` holds
-  `context`) can drop a window: a measure raised by a limit-status change carries only windows
-  whose reset is still ahead by the local clock, so a window it lacks is kept (an idle Pro
-  session past its 5h reset keeps its column). A reply with no rate limits while none is known
-  sets `noLimits`: off a subscription (API key, cloud provider) the band has no limit columns
-  instead of two "waiting" forever. The engine's own list at `session.start` is dated then, so
-  an older stored list no longer replaces it. An empty limits pair is left out (no stray gap in
-  the narrow layout for a `spend_limit`-only list; that window still has no column).
-  `plugin.json` description updated. 23 tests.
+### What changed on 2026-10-31 (three pushes, each passed a Fable gate)
 
-- **2026-10-31 night, band redesign** (owner: the 3-column band "looks bloody awful"). See "What
-  the band is". Iterated in the app on four rounds of screenshots from a local dev install
-  (marketplace `pixel-buddy-dev` in `~/Claude Projects/pixel-buddy-dev-marketplace`, a copy of the
-  plugin folder; a symlinked plugin is refused as a path outside the marketplace). Screenshots:
-  `screencapture -l <window id>` of the Claude window from the shell (computer use refuses Claude's
-  own window); the session whose turn is running does not reload, so capture another session.
-  Seen only at the owner's narrower window width (right panel open), not at full width.
+1. **`705662a`, the 5h column follows the plan.** Claude's plans (claude.com/pricing): Free, Pro
+   ($20), Max ($100, 5x Pro), Ultra ($200, 10x Pro, *no 5-hour limit for verified accounts*). A
+   plugin cannot read the plan: `$.session.identity()` answers only mods installed by an
+   organization's managed settings. But the engine reports only the windows the account has, so
+   the band draws a block for each window in `LIMIT_WINDOWS` that the known list holds. Before any
+   list is known, both 5h and 7d show `waiting`. Unverified Ultra, Pro and Max still report
+   `five_hour` and keep the block.
+2. **`993bcd6`, edge cases from the first gate.**
+   - Only a reply can drop a window. A `session.measure` counts as a reply when `changed` holds
+     `context`. A measure raised by a limit-status change carries only windows whose reset is still
+     ahead by the local clock, so a window it lacks is merged back in (an idle Pro session past its
+     5h reset keeps its 5h block).
+   - Off a subscription (API key, Bedrock, Vertex) replies carry no rate limits: the first reply
+     with none while none is known sets `noLimits`, and the band shows no limit blocks instead of
+     two `waiting` forever.
+   - The engine's own list at `session.start` is dated then, so an older stored list does not
+     replace it.
+3. **`459e2a4`..`c1241da`, the redesign** (see "What the band is" for the result):
+   - large values (`size: 'title'`, `weight: 'semibold'`, `tabular`; `heading` looked no bigger
+     than body in the app), dim unit and caption;
+   - blocks share the width (`flexGrow`, `width={0}`), context gets twice a limit's share;
+   - bars stretch to their block: `stretchBarSvg` draws 1000 units with
+     `preserveAspectRatio="none"` and `vector-effect="non-scaling-stroke"` lines, and the `Svg` has
+     no `width` prop (the app draws it as an `img` with `max-width:100%`, so it fills the block);
+   - the old fourth column (to compact, saved) is folded into the context caption:
+     `44% used · 163k to compact · saved 217k (2×)`;
+   - the mascot's right edge fades by an SVG `<mask>` to transparent. Before, it faded to the fixed
+     `BAND_BG` `#212121` while the app's band is about `#313131`, which left a hard seam;
+   - the mascot sits beside the stats from 60 band cells with two blocks, 78 with three (the first
+     redesign gate said NO PUSH because a three-block band at 60-77 cells clipped its values).
 
-## Earlier (2026-10-15)
+### Known gaps, all judged low by the gates and left as they are
 
-- **2026-10-15, 5h/7d columns fixed (not yet released).** The engine learns rate limits only
-  from a reply's headers: `$.session.usage().rateLimits` is `[]` at `session.start` (measured on
-  2.1.299 and 2.1.300), and `session.start` wrote that over the session's list. The desktop app
-  re-runs `session.start` in every open session when any plugin is installed or updated
-  (`reload_plugins broadcast`), so every idle session showed `–`/`waiting` until its own next
-  reply; an idle session also kept a stale percent past its window's reset (`resets 0m`). Now
-  each reply's list goes to the plugin's store as `{ limits, at }` too (one JSON file per plugin
-  source under `~/.claude/plugins/store/`, e.g. `pixel-buddy_inline-*.json` for a `--plugin-dir`
-  run), and every session takes it at `session.start` and on its minute tick when it is newer
-  than its own; an empty list never replaces a known one. A window whose `resetsAt` has passed
-  draws `0%`, an empty bar and `reset`. Checked in the test kit and with two real `claude -p`
-  runs (the second's `session.start` held the first's list); not yet seen in the app.
-- **The mascot animates itself** since the desktop app update of 2026-10-14 (2.31226.1 to
-  2.37337.1). See "Self-animating mascot" below: the band sends one picture per scene instead of
-  one per 150 ms frame. It replaces the 2026-10-09 frame-load fix (the 2-minute quiet window
-  and the 16 s stills are gone; idle sessions animate again).
-- **Not yet seen in the app by eye**: the screen was locked during the work. Checked in a
-  headless copy of the app's drawing pipeline, in the test kit under the app's engine, and in a
-  real engine run. First thing to do: look at the band, and watch the renderer for an evening.
+- **A failed first turn hides the limits:** if a subscriber's very first turn errors or is aborted
+  before any limit list is known (fresh install, empty store), that turn's measure carries
+  `context` and no limits, so `noLimits` hides both limit blocks until the first good reply. Cannot
+  happen on the owner's Mac (the store always holds a list).
+- **`changed` holding `context` is not a perfect reply test:** the first measure of a process, and
+  one after `/clear` or a model switch, also carry it; if such a measure is a reset-filtered
+  status change, a past-reset window is dropped until the next reply anywhere. Rare.
+- **The context caption truncates first:** below about 90 cells (Ultra) or 110 (Pro/Max) the
+  `saved` figure is cut by `truncate-end`.
+- **Very narrow bands (50 cells or less) with three blocks** cut the `5h`/`7d` unit at 100% usage.
+- **The bar's round caps** are clipped very slightly at both ends (cosmetic).
+- **A merged-in window can outlive the account change** if no reply ever arrives (the engine knows
+  no better either).
 
-- **Released on `main`** and installed on the owner's Mac from GitHub
-  (`pixel-buddy@monsterlag-plugins`). It is not installed on any other host.
-- **Rollout is manual.** Claude Code's built-in plugin auto-update does not run for the owner
-  (the desktop app disables it for its sessions, and CLI auto-updates are off on the Mac).
-  After a push: `claude plugin marketplace update monsterlag-plugins` then
-  `claude plugin update pixel-buddy@monsterlag-plugins`; the desktop app then reloads its open
-  sessions by itself within a few minutes (`/reload-plugins` does it at once).
-- **The 2026-10-09 evening regression** (app crawling, band freezing) and its fix are written up
-  under "Frame load". The fix is released; whether it holds over hours is not yet known.
-- **The manifest lives in `plugins/pixel-buddy/.claude-plugin/plugin.json`** (since 2026-10-17).
-  Upstream kept it at the repo root, where the marketplace (source `./plugins/pixel-buddy`) never
-  read it: the desktop app's Plugins screen showed no author or description, and the `cacheTtl`
-  option never reached the plugin. ("0 skills" stays: the app counts SKILL.md folders, and this plugin has none.) It has no `version` on purpose: the installed version
-  is the commit sha, so every push is picked up (`validate` warns about it; that is expected).
+## How to work on the band (recipes that worked on 2026-10-31)
+
+### See the real band
+
+Computer use refuses to capture or control Claude's own window. A read-only capture from the shell
+works (needs Screen Recording for the shell, which this Mac has):
+
+```zsh
+# CGWindowID of the largest on-screen window owned by "Claude"
+id=$(swift -e 'import CoreGraphics
+let l = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as! [[String: Any]]
+var best: (Int, Double) = (0, 0)
+for w in l where (w["kCGWindowOwnerName"] as? String) == "Claude" && (w["kCGWindowLayer"] as? Int) == 0 {
+  let b = w["kCGWindowBounds"] as! [String: Any]
+  let a = (b["Height"] as! Double) * (b["Width"] as! Double)
+  if a > best.1 { best = (w["kCGWindowNumber"] as! Int, a) }
+}
+print(best.0)')
+screencapture -x -o -l "$id" shot.png
+sips -c 330 1520 --cropOffset 2350 600 shot.png --out band.png   # crop: adjust to the window
+```
+
+The capture shows whichever session the owner has on screen. **The session whose turn is running
+never reloads its plugins** (the app defers it until the turn ends), so the band in your own
+session shows the old code: capture another session.
+
+### Iterate in the app without pushing (owner approved this on 2026-10-31)
+
+1. Branch in the checkout.
+2. Make a local marketplace folder with a **copy** of the plugin (a symlink is refused: "Path
+   escapes plugin directory"):
+   `~/Claude Projects/pixel-buddy-dev-marketplace/.claude-plugin/marketplace.json` named
+   `pixel-buddy-dev`, one plugin `{ "name": "pixel-buddy", "source": "./pixel-buddy" }`, and
+   `rsync -a --delete plugins/pixel-buddy/ <folder>/pixel-buddy/`.
+3. `claude plugin marketplace add <folder>`, `claude plugin disable pixel-buddy@monsterlag-plugins`,
+   `claude plugin install pixel-buddy@pixel-buddy-dev`.
+4. Each round: rsync, `claude plugin uninstall pixel-buddy@pixel-buddy-dev`, `claude plugin install
+   pixel-buddy@pixel-buddy-dev`, wait for `reload_plugins applied ... 0 plugin error(s)` in
+   `~/Library/Logs/Claude/main.log` (1-2 s), capture.
+5. `claude plugin list` shows a load error (`Status: failed to load`) if the dev copy is broken; the
+   log line counts plugin errors too.
+6. When done: uninstall the dev plugin, `claude plugin marketplace remove pixel-buddy-dev`, delete
+   the folder, `claude plugin enable pixel-buddy@monsterlag-plugins`, then update it after the push.
+
+### Check before a push
+
+- `claude plugin test plugins/pixel-buddy` (24 tests) and the same with the desktop app's engine:
+  `"$(ls ~/Library/Application\ Support/Claude/claude-code/2.1.309/*/claude.app/Contents/MacOS/claude)" plugin test plugins/pixel-buddy`
+  (the app pins its own engine; check the folder for the current version).
+- `npx -y -p typescript@5.6.3 tsc -p plugins/pixel-buddy --noEmit`.
+- Anything touching the mascot picture: `tools/check-animation.mts` (instructions in its header;
+  deps install in a scratch folder; Chromium headless shell is in
+  `~/Library/Caches/ms-playwright/chromium_headless_shell-1248`). Expect 0 differing frames except
+  2 px on the bleed cut's left edge in `fishing` and `hammock`.
+- A real engine run with the checkout:
+  `claude -p --model haiku --plugin-dir plugins/pixel-buddy --settings '{"enabledPlugins":{"pixel-buddy@monsterlag-plugins":false}}' "Without using any tool, reply with the word ok."`
+  then read `~/.claude/plugins/store/pixel-buddy_inline-*.json` (the limits that run measured).
+- **Fable gate before every push that changes behaviour** (owner rule): a fresh native Fable
+  review through `~/Claude Projects/infra-docs/bin/fable-review.sh <brief.md>` (see
+  `infra-docs/runbooks/agent-tooling.md` → Native Fable review). Give it the diff range, the
+  evidence, what to check and what it must not do; push only on `VERDICT: PUSH`. Small content
+  changes the owner asks for directly do not need one.
+
+### Release
+
+Push `main`, then `claude plugin marketplace update monsterlag-plugins` and
+`claude plugin update pixel-buddy@monsterlag-plugins`. Plugin auto-update does not run on this Mac.
+The desktop app reloads open sessions within seconds (`reload_plugins broadcast` in its log).
+
+## History
+
+- **2026-10-15, 5h/7d kept across sessions (`daeff23`).** The engine learns rate limits only from
+  a reply's headers: `$.session.usage().rateLimits` is `[]` at `session.start`, and the desktop app
+  re-runs `session.start` in every open session whenever any plugin is installed or updated. Each
+  reply's list therefore also goes to the plugin's store as `{ limits, at }` (one JSON file per
+  plugin source under `~/.claude/plugins/store/`), and every session adopts it at `session.start`
+  and on its minute tick when it is newer. A window whose `resetsAt` has passed draws `0%`, an
+  empty bar and `reset`.
+- **2026-10-14, the mascot animates itself** (see "Self-animating mascot"): one SMIL picture per
+  scene instead of a still every 150 ms. Seen animating in the app on 2026-10-31.
+- **2026-10-17, the manifest moved into `plugins/pixel-buddy/.claude-plugin/plugin.json`.** At the
+  repo root (where upstream kept it) the marketplace never read it, so the app showed no author or
+  description and `cacheTtl` never applied. It has no `version` on purpose: the installed version
+  is the commit sha, so every push is picked up (`validate` warns; expected). "0 skills" in the app
+  is correct (no SKILL.md).
+- **2026-10-09, the frame-load regression** (app crawling, band freezing): see "Frame load".
 
 ## What the band is
 
@@ -371,8 +458,10 @@ grown; only relaunching the app does.
 
 ## Files
 
-- `hooks/register.tsx`: hooks, layouts, stats, timers, event cues. Tunables at the top.
-- `hooks/scene.ts`: the wrapper (two cuts, clip, fade, calibration card), the still frame and the
+- `hooks/register.tsx`: hooks, layouts, stats, timers, event cues, the limits logic (`keepLimits`,
+  `adoptLimits`, `noLimits`, `LIMIT_WINDOWS`). Tunables at the top (`WIDE_MIN_COLUMNS`, gaps, bar).
+- `tests/register.test.ts`: the test kit suite (24 tests), run by `claude plugin test`.
+- `hooks/scene.ts`: the wrapper (two cuts, clip, fade mask, calibration card), the still frame and the
   self-animating picture (`animatedSceneSvg`).
 - `hooks/animate.ts`: folds a scene's frames into one SMIL picture.
 - `hooks/rotation.ts`: seeded shuffle, slot timing, event cut-ins.
@@ -389,6 +478,8 @@ grown; only relaunching the app does.
   (one per plugin install; the installed band and a `--plugin-dir` build use different files). A malformed
   file makes every `$.store` call throw: the band catches it and keeps working, but the stored limits stay
   unused until the file is deleted by hand.
+- **Do not fade the mascot to a fixed color.** The band's color is the app's, not `BAND_BG`; the
+  mask to transparent is what makes the edge vanish.
 - **The corner clip is measured, not derived.** `EDGE_LEFT 8`, `EDGE_TOP 8.5`, `EDGE_BOTTOM 101.5`,
   `CORNER_RADIUS 10` in `hooks/scene.ts` were read off the calibration card in the owner's desktop
   app (set `CALIBRATE = true`, reload, screenshot, read the grid: lines every 8 px, thick white
@@ -399,19 +490,28 @@ grown; only relaunching the app does.
   - before 2.37337: a self-animating `Svg` (`isInteractive`) was torn down and restarted on every
     band redraw. Since: it is kept while its markup is unchanged (see "Self-animating mascot");
   - a `Client` element draws only text cells;
-  - native `Text` size and weight exist in the app since 2.37337 but the engine the app pins
-    (2.1.295) refuses them; they need engine 2.1.299 or later;
+  - native `Text` `size`, `weight`, `tabular` need engine 2.1.299 or later (2.1.295 refuses the
+    whole tree and the band goes blank); the app pins 2.1.309 as of 2026-10-31, and the band
+    checks `$.session.version()` before setting them. Of the sizes, `title` is visibly larger
+    than body; `heading` was not;
+  - an `Svg` with no `width` is drawn as an `img` with `max-width:100%`: in a column Box it fills
+    the Box's width (how the bars stretch);
+  - the session whose turn is running does not reload plugins until the turn ends;
   - an `Svg` source is capped at 131,072 characters;
   - an absolute Box at negative offsets is clipped to the band's rectangle, not its rounded shape;
-  - SVG gradients and clip paths render; an `Svg` with an empty `alt` is silently dropped.
+  - SVG gradients, clip paths and masks render and survive the scrub; an `Svg` with an empty
+    `alt` is silently dropped.
 - **A hooks module has no DOM and no Node.** Scene files import only from `./native-kit`.
 - **Scene canvas rules:** crab and props in columns 1-31; columns 32-47 are under the fade;
   feet end at row 16; loops must end on the frame they start on.
 
 ## Open
 
-- The self-animating mascot has not been looked at in the app (screen locked during the work):
-  check the corners, the scene changes, and the renderer over an evening with several sessions.
+- Look at the redesigned band at full window width, and (if anyone has one) on a Pro/Max account
+  with three blocks: both were checked only in a simulation.
+- The renderer's load with self-animating mascots over an evening with several sessions open was
+  never measured (Fable estimated 2.5-5% of a core per visible band).
+- The gaps listed under "Known gaps" at the top.
 - `done` and `drive` step at 200 ms because their 100 ms builds pass the 131k cap; a tighter
   encoding (moving parts as one group with an animated transform) would let them back to 100 ms.
 - The `SessionMode` row still redraws once a second while the cache is warm (two small plain
