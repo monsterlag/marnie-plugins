@@ -34,10 +34,10 @@ const RELAX_MS = 4 * 60_000
 // The scene is looked at again at its next loop boundary (when the next scene may be due),
 // and at least this often, so a missed change shows within this long.
 const SCENE_CHECK_MAX_MS = 5_000
-// From this engine release a Text may set `tabular` (figures of one width), which keeps
-// the stat columns from shifting as their numbers change; earlier engines refuse a tree
-// that sets it.
-const TABULAR_FROM: [number, number, number] = [2, 1, 299]
+// From this engine release a Text may set `size`, `weight` and `tabular` (figures of one
+// width, so the values do not shift as they change); earlier engines refuse a tree that
+// sets one, and the band falls back to plain bold values.
+const TYPOGRAPHY_FROM: [number, number, number] = [2, 1, 299]
 // A sub-agent the engine gave no id (so its end is never reported) counts as running
 // for this long after its spawn; one with an id that never reports an end, for
 // SUBAGENT_STALE_S.
@@ -47,7 +47,7 @@ const SUBAGENT_STALE_S = 30 * 60
 const COMPACTION_CARRY_S = 20
 
 // Layout, tuned by eye in the desktop app. Box gaps are in character
-// cells; the bar is in CSS pixels.
+// cells; the bar's height is in CSS pixels (its width is its block's).
 // BLEED: the mascot picture leaves the flow and is pinned by its top-left corner above
 // and left of the band's content, so the band's own edge clips it; a blank the size of the
 // picture's scene part holds its room in the row. Offsets are whole character cells
@@ -55,20 +55,19 @@ const COMPACTION_CARRY_S = 20
 const BLEED: boolean = true
 // The bleed layout is used from this many band cells (bodyColumns); below, or with
 // BLEED off, the narrow layout.
-const WIDE_MIN_COLUMNS = 84
+const WIDE_MIN_COLUMNS = 60
 const BLEED_TOP = -1
 const BLEED_LEFT = -2
 // The blank that holds the bled picture's room, in CSS pixels.
 const BLEED_SPACER_WIDTH = SCENE_BODY_WIDTH
 const BLEED_SPACER_HEIGHT = SCENE_BODY_HEIGHT
-// Between the mascot and the stats beside it (or, wrapped, the rows under it).
+// Between the mascot and the stats beside it (or, narrow, the row under it).
 const MASCOT_GAP = 2
-// Between stat columns, and between the two rows they wrap to.
-const STAT_GAP = 2
+// Between stat blocks, and (narrow) between the picture and the stats under it.
+const STAT_GAP = 4
 const STAT_ROW_GAP = 1
 // Between a value and its unit label.
 const UNIT_GAP = 1
-const BAR_WIDTH = 72
 const BAR_HEIGHT = 7
 const BAR_THICKNESS = 3
 const TICK_WIDTH = 2
@@ -94,19 +93,22 @@ function clockText(ms: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
-// A stat column's bar: a 3 px track with a fill to `percent`, and for the context
-// column a tick at `tick` percent. A pure function of its arguments, so an unchanged
-// reading gives the identical string.
-function barSvg(percent: number, color: string, tick?: number): string {
-  const y = (BAR_HEIGHT - BAR_THICKNESS) / 2
-  const r = BAR_THICKNESS / 2
-  const w = (BAR_WIDTH * Math.min(100, Math.max(0, percent))) / 100
-  const x = tick === undefined ? 0 : Math.min(BAR_WIDTH - TICK_WIDTH, Math.max(0, (BAR_WIDTH * tick) / 100 - TICK_WIDTH / 2))
+// A block's bar, drawn to stretch across whatever width its block has: the drawing is
+// scaled without keeping its proportions, and its lines keep their pixel widths. A pure
+// function of its arguments, so an unchanged reading gives the identical string.
+function stretchBarSvg(percent: number, color: string, tick?: number): string {
+  const W = 1000
+  const y = BAR_HEIGHT / 2
+  const p = Math.min(100, Math.max(0, percent))
+  const line = (x1: number, x2: number, stroke: string) =>
+    `<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="${stroke}" stroke-width="${BAR_THICKNESS}" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${BAR_WIDTH} ${BAR_HEIGHT}" width="${BAR_WIDTH}" height="${BAR_HEIGHT}">` +
-    `<rect x="0" y="${y}" width="${BAR_WIDTH}" height="${BAR_THICKNESS}" rx="${r}" fill="${BAR_TRACK}"/>` +
-    (w > 0 ? `<rect x="0" y="${y}" width="${w.toFixed(2)}" height="${BAR_THICKNESS}" rx="${r}" fill="${color}"/>` : '') +
-    (tick === undefined ? '' : `<rect x="${x.toFixed(2)}" y="0" width="${TICK_WIDTH}" height="${BAR_HEIGHT}" fill="${BAR_TICK}"/>`) +
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-2 0 ${W + 4} ${BAR_HEIGHT}" width="${W}" height="${BAR_HEIGHT}" preserveAspectRatio="none">` +
+    line(0, W, BAR_TRACK) +
+    (p > 0 ? line(0, (W * p) / 100, color) : '') +
+    (tick === undefined
+      ? ''
+      : `<line x1="${(W * tick) / 100}" y1="0" x2="${(W * tick) / 100}" y2="${BAR_HEIGHT}" stroke="${BAR_TICK}" stroke-width="${TICK_WIDTH}" vector-effect="non-scaling-stroke"/>`) +
     `</svg>`
   )
 }
@@ -114,8 +116,6 @@ function barSvg(percent: number, color: string, tick?: number): string {
 const MASCOT_SPACER =
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${BLEED_SPACER_WIDTH} ${BLEED_SPACER_HEIGHT}" width="${BLEED_SPACER_WIDTH}" height="${BLEED_SPACER_HEIGHT}">` +
   `<rect x="0" y="0" width="${BLEED_SPACER_WIDTH}" height="${BLEED_SPACER_HEIGHT}" fill="#000000" fill-opacity="0"/></svg>`
-// Holds the bar's room in a column that has none, so its lines sit level with the rest.
-const BAR_SPACER = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${BAR_WIDTH} ${BAR_HEIGHT}" width="${BAR_WIDTH}" height="${BAR_HEIGHT}"/>`
 
 // A pixel hourglass: sand on top drains as the cache TTL runs out.
 function hourglassSvg(frac: number): string {
@@ -243,11 +243,11 @@ async function sceneAt($: EngineInterface, t: number, m: Mood, since: number): P
 
 // This session's scene bookkeeping (the module runs once per session; a reload starts it
 // over, and session.start runs again): the scene last written, the pending look, the
-// queue that keeps looks one at a time, and whether the engine takes `tabular`.
+// queue that keeps looks one at a time, and whether the engine takes the typography props.
 let shownKey: string | undefined
 let wake: { cancel: () => void } | undefined
 let looking: Promise<void> = Promise.resolve()
-let tabular = false
+let typography = false
 
 // Looks at which scene is due and writes `frame` only when it is another one: the band
 // redraws once a scene, never a frame. Then waits for the scene's next loop boundary (or
@@ -312,6 +312,7 @@ const published = (k: Compaction | undefined) =>
     ? k
     : undefined
 
+type Block = Stat & { grow: number }
 type Stat = { key: string; label: string; value: string; unit: string; caption: string; bar?: { percent: number; tick?: number } }
 
 export const register: Register = (on, options) => {
@@ -340,9 +341,9 @@ export const register: Register = (on, options) => {
     })
     await update($, moodAt, () => t0)
     try {
-      tabular = atLeast((await $.session.version()).version, TABULAR_FROM)
+      typography = atLeast((await $.session.version()).version, TYPOGRAPHY_FROM)
     } catch {
-      tabular = false
+      typography = false
     }
     shownKey = undefined
     await watchCompaction($)
@@ -420,9 +421,10 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // The band above the prompt: a column of exact figures each for the account's limits
-  // (5h and 7d, or 7d alone on a plan without a 5h limit) and the context (a fourth, tokens left before the next compaction, while
-  // monster-compact publishes one), led by the mascot at the left.
+  // The band above the prompt: a block of exact figures each for the account's limits
+  // (5h and 7d, or 7d alone on a plan without a 5h limit) and the context (with tokens
+  // left before the next compaction while monster-compact publishes them), led by the
+  // mascot at the left. The terminal gets the same figures on one line.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const ui = $.ui.resolve(e)
@@ -452,33 +454,26 @@ export const register: Register = (on, options) => {
     // known, both wait, and off a subscription there are none.
     const windows = isOffPlan && !rl.length ? [] : LIMIT_WINDOWS.filter(([kind]) => !rl.length || rl.some(l => l.kind === kind))
     const left = comp ? leftToCompact(c, comp.compactAtPercent) : undefined
+    const saved = comp ? savedText(comp) : undefined
+    // The context folds in what monster-compact publishes.
     const stats: Stat[] = [
       ...windows.map(([kind, label]) => limitStat(kind, label)),
       {
         key: 'context',
         label: 'context',
         value: c?.tokens === undefined ? '–' : kTokens(c.tokens),
-        unit: c ? `/ ${kTokens(c.window)}` : '',
-        caption: c?.percent === undefined ? 'context' : `context · ${Math.round(c.percent)}%`,
+        unit: c ? `/ ${kTokens(c.window)} context` : 'context',
+        caption: [
+          c?.percent === undefined ? 'waiting' : `${Math.round(c.percent)}% used`,
+          ...(comp ? [`${left === undefined ? '–' : kTokens(left)} to compact`, ...(saved ? [saved] : [])] : []),
+        ].join(' · '),
         bar: { percent: Math.round(c?.percent ?? 0), ...(comp ? { tick: comp.compactAtPercent } : {}) },
       },
-      ...(comp
-        ? [
-            {
-              key: 'compact',
-              label: 'to compact',
-              value: left === undefined ? '–' : kTokens(left),
-              unit: 'left',
-              caption: savedText(comp) ?? 'saved –',
-            },
-          ]
-        : []),
     ]
 
     if (e.surface !== 'desktop' && e.surface !== 'vscode') {
       const context = stats[windows.length] as Stat
       const limitText = (s: Stat) => [s.label, s.value, ...(s.caption.startsWith('resets ') ? [s.caption.slice(7)] : [])].join(' ')
-      const saved = comp ? savedText(comp) : undefined
       const line = [
         ...stats.slice(0, windows.length).map(limitText),
         c?.tokens === undefined ? 'ctx –' : `ctx ${context.value}/${kTokens(c.window)}${c.percent === undefined ? '' : ` ${Math.round(c.percent)}%`}`,
@@ -498,33 +493,25 @@ export const register: Register = (on, options) => {
     const since = m === stored ? await read($, moodAt) : 0
     const { mood: shownMood, shown } = await sceneAt($, tFrame, m, since)
 
-    // Figures of one width, where the engine takes them (typed loosely: older engines'
-    // types do not know the prop).
-    const figures = (tabular ? { tabular: true } : {}) as object
-    const column = (s: Stat) => (
-      <Box key={s.key} flexDirection="column" flexShrink={0}>
-        <Box flexDirection="row" gap={UNIT_GAP}>
-          <Text bold wrap="truncate-end" {...figures}>{s.value}</Text>
+    // The engine's typography (size, weight, tabular figures) where it takes it (typed
+    // loosely: older engines' types do not know the props).
+    const type = (props: object) => (typography ? props : {}) as object
+    // Context gets twice a limit's share of the width.
+    const blocks: Block[] = stats.map(s => ({ ...s, grow: s.key === 'context' ? 2 : 1 }))
+    const block = (s: Block) => (
+      <Box key={s.key} flexDirection="column" flexGrow={s.grow} flexShrink={1} width={0}>
+        <Box flexDirection="row" alignItems="flex-end" gap={UNIT_GAP}>
+          <Text {...type({ size: 'title', weight: 'semibold', tabular: true })} bold={!typography} wrap="truncate-end">
+            {s.value}
+          </Text>
           {s.unit ? <Text dimColor wrap="truncate-end">{s.unit}</Text> : null}
         </Box>
-        <Text dimColor wrap="truncate-end">{s.caption}</Text>
+        <Text dimColor {...type({ size: 'footnote' })} wrap="truncate-end">
+          {s.caption}
+        </Text>
         {s.bar ? (
-          <Svg
-            source={barSvg(s.bar.percent, levelColor(s.bar.percent), s.bar.tick)}
-            alt={`${s.label} bar, ${s.bar.percent}%`}
-            width={BAR_WIDTH}
-            height={BAR_HEIGHT}
-          />
-        ) : (
-          <Svg source={BAR_SPACER} alt="" width={BAR_WIDTH} height={BAR_HEIGHT} />
-        )}
-      </Box>
-    )
-    // The columns go in pairs that never break, so a narrow band wraps them to two
-    // rows (the limits over context and to-compact), never three and one.
-    const pair = (key: string, pairStats: Stat[]) => (
-      <Box key={key} flexDirection="row" alignItems="flex-start" gap={STAT_GAP} flexShrink={0}>
-        {pairStats.map(column)}
+          <Svg source={stretchBarSvg(s.bar.percent, levelColor(s.bar.percent), s.bar.tick)} alt={`${s.label} bar, ${s.bar.percent}%`} height={BAR_HEIGHT} />
+        ) : null}
       </Box>
     )
 
@@ -543,16 +530,16 @@ export const register: Register = (on, options) => {
         />
       )
     }
-    // A pair with no columns is left out, so it adds no gap.
-    const statPairs = [
-      ...(windows.length ? [pair('limits', stats.slice(0, windows.length))] : []),
-      pair('session', stats.slice(windows.length)),
-    ]
+    const statRow = (
+      <Box flexDirection="row" alignItems="center" flexWrap="nowrap" flexGrow={1} flexShrink={1} columnGap={STAT_GAP}>
+        {blocks.map(block)}
+      </Box>
+    )
 
     // Wide: one row that never wraps, so the band keeps the height the bled picture's
     // outline was measured for. The picture is out of the flow, pinned by its top-left
-    // corner past the band's edge; the blank holds its room before the stats, whose
-    // columns spread evenly over the rest of the band (STAT_GAP is the least between them).
+    // corner past the band's edge; the blank holds its room before the stats, which share
+    // the rest of the band.
     if (BLEED && e.props.bodyColumns >= WIDE_MIN_COLUMNS) {
       return (
         <Box position="relative" flexDirection="row" alignItems="center" flexWrap="nowrap" columnGap={MASCOT_GAP} paddingX={1}>
@@ -562,20 +549,16 @@ export const register: Register = (on, options) => {
           <Box flexShrink={0}>
             <Svg source={MASCOT_SPACER} alt="mascot space" width={BLEED_SPACER_WIDTH} height={BLEED_SPACER_HEIGHT} />
           </Box>
-          <Box flexDirection="row" alignItems="flex-start" justifyContent="space-between" flexWrap="nowrap" flexGrow={1} flexShrink={1} columnGap={STAT_GAP}>
-            {stats.map(column)}
-          </Box>
+          {statRow}
         </Box>
       )
     }
     // Narrow: no bleed. The picture has the first row to itself, in the flow and never
-    // squeezed; the stats follow under it, their two pairs wrapping to two rows of two.
+    // squeezed; the stats share the row under it.
     return (
-      <Box flexDirection="column" alignItems="flex-start" rowGap={STAT_ROW_GAP} paddingX={1}>
+      <Box flexDirection="column" alignItems="stretch" rowGap={STAT_ROW_GAP} paddingX={1}>
         <Box flexShrink={0}>{mascotSvg('inline')}</Box>
-        <Box flexDirection="row" alignItems="flex-start" flexWrap="wrap" flexShrink={1} columnGap={STAT_GAP} rowGap={STAT_ROW_GAP}>
-          {statPairs}
-        </Box>
+        {statRow}
       </Box>
     )
   })

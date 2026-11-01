@@ -20,8 +20,8 @@ const PROPS = {
 }
 const NONE: Compaction = { compactAtPercent: 60, count: 0, lastSaved: 0, lastSavedMeasured: false, totalSaved: 0, lastAt: null }
 const ONE: Compaction = { ...NONE, count: 1, lastSaved: 172_000, totalSaved: 172_000, lastAt: NOW }
-// The context bar's tick: 2 px wide, centred on 60% of the 72 px bar.
-const TICK = '<rect x="42.20" y="0" width="2" height="7" fill="#e8e6df"/>'
+// The context bar's tick: a 2 px line at 60% of the bar's 1000-unit drawing.
+const TICK = '<line x1="600" y1="0" x2="600" y2="7" stroke="#e8e6df" stroke-width="2" vector-effect="non-scaling-stroke"/>'
 
 // The mocked clock of the band last mounted.
 let clock: ReturnType<typeof mock.clock>
@@ -50,39 +50,44 @@ async function band<S extends 'terminal' | 'desktop'>($: Engine, on: On, surface
   return $.ui.mount({ plugin: 'pixel-buddy', surface, component: 'AbovePrompt', props: PROPS })
 }
 
-// A desktop band's stat columns (their keys, in order), its bars (every Svg that says
+// A desktop band's stat blocks (their keys, in order), its bars (every Svg that says
 // it is one), its mascot, and its texts in reading order.
 async function columns($: Engine, on: On, seated?: Compaction, percent?: number) {
   const ui = await band($, on, 'desktop', seated, percent)
   const svgs = (await ui.findAll({ type: 'Svg' })).map(s => s.props as { source: string; alt: string; width: number; height: number })
   const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
   const tree = (await ui.drawn()) as unknown as { children: { children: { props: { key: string } }[] }[] }
-  // The bled mascot and the blank holding its room lead; the stat columns follow.
+  // The bled mascot and the blank holding its room lead; the stat blocks follow.
   const keys = tree.children[2]?.children.map(c => c.props.key)
   return { keys, bars: svgs.filter(s => / bar, /.test(s.alt)), mascot: svgs.filter(s => s.alt.startsWith('Claude is')), texts }
 }
 
 const LIMITS = ['41%', '5h', 'resets 3h 12m', '19%', '7d', 'resets 6d 0h']
-const CONTEXT = ['80k', '/ 200k', 'context · 40%']
+const CONTEXT = ['80k', '/ 200k context', '40% used']
+// The context block's caption with monster-compact's value: 80k of a 200k window
+// against a 60% threshold leaves 120k - 80k.
+const WITH_COMPACT = (saved: string) => ['80k', '/ 200k context', `40% used · 40k to compact · ${saved}`]
 
 describe('register', () => {
-  test('desktop: the mascot and three columns while nothing is published', { plugins: [publisher] }, async ($, on) => {
+  test('desktop: the mascot and three blocks while nothing is published', { plugins: [publisher] }, async ($, on) => {
     const { keys, bars, mascot, texts } = await columns($, on, undefined, 40)
     expect(keys).toEqual(['five_hour', 'seven_day', 'context'])
     expect(texts).toEqual([...LIMITS, ...CONTEXT])
     expect(bars.map(b => b.alt)).toEqual(['5h bar, 41%', '7d bar, 19%', 'context bar, 40%'])
     // No threshold is known, so the context bar carries no tick.
     expect(bars.some(b => b.source.includes('#e8e6df'))).toBe(false)
-    expect(bars[0]?.source).toContain('<rect x="0" y="2" width="29.52" height="3" rx="1.5" fill="#4cc35a"/>')
+    // The bars stretch to their block: drawn 1000 units wide, scaled without proportion.
+    expect(bars[0]?.source).toContain('preserveAspectRatio="none"')
+    expect(bars[0]?.source).toContain('<line x1="0" y1="3.5" x2="410" y2="3.5" stroke="#4cc35a"')
+    expect(bars.map(b => b.width)).toEqual([undefined, undefined, undefined])
     expect(mascot.map(m => [m.width, m.height])).toEqual([[216, 104]])
   })
 
-  test('desktop: a fourth column and the context tick when the state is present', { plugins: [publisher] }, async ($, on) => {
+  test('desktop: the context caption and tick carry the compaction state when present', { plugins: [publisher] }, async ($, on) => {
     const { keys, bars, mascot, texts } = await columns($, on, { ...ONE, count: 3 }, 40)
-    expect(keys).toEqual(['five_hour', 'seven_day', 'context', 'compact'])
-    // 80k of a 200k window against a 60% threshold: 120k - 80k left.
-    expect(texts).toEqual([...LIMITS, ...CONTEXT, '40k', 'left', 'saved ~172k (3×)'])
-    // The fourth column has no bar; the tick is on the context bar alone.
+    expect(keys).toEqual(['five_hour', 'seven_day', 'context'])
+    expect(texts).toEqual([...LIMITS, ...WITH_COMPACT('saved ~172k (3×)')])
+    // The tick is on the context bar alone.
     expect(bars.map(b => [b.alt, b.source.includes(TICK)])).toEqual([
       ['5h bar, 41%', false],
       ['7d bar, 19%', false],
@@ -94,10 +99,10 @@ describe('register', () => {
   test('desktop: a measured saving stands without the mark', { plugins: [publisher] }, async ($, on) => {
     const measured = { ...ONE, lastSaved: 85_343, totalSaved: 85_343, lastSavedMeasured: true, lastBefore: 164_377, lastAfter: 79_034 }
     const { texts } = await columns($, on, measured, 40)
-    expect(texts.slice(-3)).toEqual(['40k', 'left', 'saved 85k'])
+    expect(texts.slice(-3)).toEqual(WITH_COMPACT('saved 85k'))
   })
 
-  test('desktop: a value without a usable threshold draws the three-column band', { plugins: [publisher] }, async ($, on) => {
+  test('desktop: a value without a usable threshold draws the plain context block', { plugins: [publisher] }, async ($, on) => {
     const { compactAtPercent: _none, ...partial } = ONE
     const { keys, bars, texts } = await columns($, on, partial as Compaction, 40)
     expect(keys).toEqual(['five_hour', 'seven_day', 'context'])
@@ -126,12 +131,12 @@ describe('register', () => {
     expect(await limitBars()).toEqual(['5h bar, 0%', '7d bar, 19%'])
   })
 
-  test('desktop: a plan without a 5h limit (Ultra) shows the 7d column alone', { plugins: [publisher] }, async ($, on) => {
+  test('desktop: a plan without a 5h limit (Ultra) shows the 7d block alone', { plugins: [publisher] }, async ($, on) => {
     const ui = await band($, on, 'desktop', ONE, 40, '2.1.295', [WEEK])
     const tree = (await ui.drawn()) as unknown as { children: { children: { props: { key: string } }[] }[] }
-    expect(tree.children[2]?.children.map(c => c.props.key)).toEqual(['seven_day', 'context', 'compact'])
+    expect(tree.children[2]?.children.map(c => c.props.key)).toEqual(['seven_day', 'context'])
     const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text)
-    expect(texts).toEqual(['19%', '7d', 'resets 6d 0h', ...CONTEXT, '40k', 'left', 'saved ~172k'])
+    expect(texts).toEqual(['19%', '7d', 'resets 6d 0h', ...WITH_COMPACT('saved ~172k')])
   })
 
   test('terminal: a plan without a 5h limit leaves it off the line', { plugins: [publisher] }, async ($, on) => {
@@ -168,21 +173,23 @@ describe('register', () => {
     expect(await keys()).toEqual(['seven_day', 'context'])
   })
 
-  test('desktop: a list of no known window draws a narrow band without an empty limits pair', { plugins: [publisher] }, async ($, on) => {
+  test('desktop: a list of no known window draws a narrow band with the context block alone', { plugins: [publisher] }, async ($, on) => {
     await band($, on, 'desktop', ONE, 40, '2.1.295', [{ kind: 'spend_limit', percentUsed: 30 }])
-    const ui = await $.ui.mount({ plugin: 'pixel-buddy', surface: 'desktop', component: 'AbovePrompt', props: { ...PROPS, bodyColumns: 60 } })
+    const ui = await $.ui.mount({ plugin: 'pixel-buddy', surface: 'desktop', component: 'AbovePrompt', props: { ...PROPS, bodyColumns: 50 } })
     const tree = (await ui.drawn()) as unknown as { children: { children: { props: { key: string } }[] }[] }
-    expect(tree.children[1]?.children.map(c => c.props.key)).toEqual(['session'])
+    expect(tree.children[1]?.children.map(c => c.props.key)).toEqual(['context'])
   })
 
-  test('desktop: a narrow band with the 7d window alone pairs it on its own', { plugins: [publisher] }, async ($, on) => {
+  test('desktop: a band from 60 cells puts the mascot beside the stats; below, above them', { plugins: [publisher] }, async ($, on) => {
     await band($, on, 'desktop', ONE, 40, '2.1.295', [WEEK])
-    const ui = await $.ui.mount({ plugin: 'pixel-buddy', surface: 'desktop', component: 'AbovePrompt', props: { ...PROPS, bodyColumns: 60 } })
-    const tree = (await ui.drawn()) as unknown as { children: { children: { props: { key: string }; children: { props: { key: string } }[] }[] }[] }
-    expect(tree.children[1]?.children.map(p => [p.props.key, p.children.map(c => c.props.key)])).toEqual([
-      ['limits', ['seven_day']],
-      ['session', ['context', 'compact']],
-    ])
+    const shape = async (bodyColumns: number) => {
+      const ui = await $.ui.mount({ plugin: 'pixel-buddy', surface: 'desktop', component: 'AbovePrompt', props: { ...PROPS, bodyColumns } })
+      const svgs = (await ui.findAll({ type: 'Svg' })).map(s => s.props as { alt: string; width: number })
+      const tree = (await ui.drawn()) as unknown as { children: { children: { props: { key: string } }[] }[] }
+      return { mascotWidth: svgs.find(s => s.alt.startsWith('Claude is'))?.width, keys: tree.children.at(-1)?.children.map(c => c.props.key) }
+    }
+    expect(await shape(60)).toEqual({ mascotWidth: 216, keys: ['seven_day', 'context'] })
+    expect(await shape(59)).toEqual({ mascotWidth: 192, keys: ['seven_day', 'context'] })
   })
 
   test('desktop: the engine\'s own list at session start outranks an older stored one', { plugins: [publisher] }, async ($, on) => {
@@ -253,8 +260,8 @@ describe('register', () => {
     expect((await mascot())?.alt).toBe('Claude is idle')
   })
 
-  test('desktop: figures are tabular only on an engine that takes the prop', { plugins: [publisher] }, async ($, on) => {
-    // The kit validates with the engine running the test: one older than TABULAR_FROM
+  test('desktop: values are large, semibold and tabular only on an engine that takes the props', { plugins: [publisher] }, async ($, on) => {
+    // The kit validates with the engine running the test: one older than TYPOGRAPHY_FROM
     // refuses the prop (which is why the band asks), so there the check cannot run.
     const ui = await band($, on, 'desktop', undefined, 40, '2.1.299').catch((error: Error) => {
       if (/Text prop "tabular" is not allowed/.test(error.message)) return undefined
@@ -262,13 +269,14 @@ describe('register', () => {
     })
     if (!ui) return
     const value = (await ui.findAll({ type: 'Text' })).find(t => t.text === '41%')
-    expect(value?.props).toMatchObject({ bold: true, tabular: true })
+    expect(value?.props).toMatchObject({ size: 'title', weight: 'semibold', tabular: true })
   })
 
-  test('desktop: no tabular prop on an older engine', { plugins: [publisher] }, async ($, on) => {
+  test('desktop: plain bold values on an older engine', { plugins: [publisher] }, async ($, on) => {
     const ui = await band($, on, 'desktop', undefined, 40, '2.1.295')
     const value = (await ui.findAll({ type: 'Text' })).find(t => t.text === '41%')
-    expect(value?.props).not.toHaveProperty('tabular')
+    expect(value?.props).toMatchObject({ bold: true })
+    for (const prop of ['tabular', 'size']) expect(value?.props).not.toHaveProperty(prop)
   })
 
   test('animation: every scene fits as one picture of allowed elements', () => {

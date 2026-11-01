@@ -35,13 +35,18 @@ export const SCENE_BODY_HEIGHT = CORE_ROWS * SCALE
 
 const svgOpen = (x: number, y: number, w: number, h: number) =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${x} ${y} ${w} ${h}" width="${w * SCALE}" height="${h * SCALE}" shape-rendering="crispEdges">`
-// The band's color under everything, and the gradient into it over the last columns.
+// The band's color under everything, and a mask that fades the picture out over its last
+// columns, so it ends in whatever color the band has (the app's band is lighter than
+// BAND_BG, and a fade to a fixed color left a seam).
 const GROUND = `<rect x="${-PAD_COLS - 2}" y="${-PAD_ROWS - 2}" width="${CORE_COLS + PAD_COLS + 4}" height="${CORE_ROWS + 2 * PAD_ROWS + 4}" fill="${BAND_BG}"/>`
-const FADE =
-  `<defs><linearGradient id="fade" x1="0" y1="0" x2="1" y2="0">` +
-  `<stop offset="0" stop-color="${BAND_BG}" stop-opacity="0"/><stop offset="1" stop-color="${BAND_BG}" stop-opacity="1"/>` +
-  `</linearGradient></defs>` +
-  `<rect x="${CORE_COLS - FADE_COLUMNS}" y="${-PAD_ROWS}" width="${FADE_COLUMNS}" height="${CORE_ROWS + 2 * PAD_ROWS}" fill="url(#fade)"/>`
+const FADE_MASK =
+  `<linearGradient id="fade" x1="0" y1="0" x2="1" y2="0">` +
+  `<stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#000"/>` +
+  `</linearGradient>` +
+  `<mask id="fadeout" maskUnits="userSpaceOnUse" x="${-PAD_COLS - 2}" y="${-PAD_ROWS - 2}" width="${CORE_COLS + PAD_COLS + 4}" height="${CORE_ROWS + 2 * PAD_ROWS + 4}">` +
+  `<rect x="${-PAD_COLS - 2}" y="${-PAD_ROWS - 2}" width="${CORE_COLS - FADE_COLUMNS + PAD_COLS + 2}" height="${CORE_ROWS + 2 * PAD_ROWS + 4}" fill="#fff"/>` +
+  `<rect x="${CORE_COLS - FADE_COLUMNS}" y="${-PAD_ROWS - 2}" width="${FADE_COLUMNS}" height="${CORE_ROWS + 2 * PAD_ROWS + 4}" fill="url(#fade)"/>` +
+  `</mask>`
 // The clip shapes. The bleed one is written in output pixels and scaled into the grid.
 const BLEED_CLIP = (() => {
   const [L, T, B, r] = [EDGE_LEFT, EDGE_TOP, EDGE_BOTTOM, CORNER_RADIUS]
@@ -69,7 +74,7 @@ const wrap = (variant: SceneVariant, body: string) => {
     variant === 'bleed'
       ? [svgOpen(-PAD_COLS, -PAD_ROWS, CORE_COLS + PAD_COLS, CORE_ROWS + 2 * PAD_ROWS), BLEED_CLIP]
       : [svgOpen(0, 0, CORE_COLS, CORE_ROWS), INLINE_CLIP]
-  return `${open}<defs><clipPath id="edge">${clip}</clipPath></defs><g clip-path="url(#edge)">${GROUND}${body}${FADE}</g></svg>`
+  return `${open}<defs><clipPath id="edge">${clip}</clipPath>${FADE_MASK}</defs><g clip-path="url(#edge)"><g mask="url(#fadeout)">${GROUND}${body}</g></g></svg>`
 }
 
 // One still frame of `scene`, `t` seconds into its loop, in the given cut. `clock` is a
